@@ -1,0 +1,16 @@
+# Packages removed from the rootfs AFTER configuration, before squashfs.
+# These are only needed during the build and must not appear in the final image.
+# Processed by scripts/clean-rootfs.sh (uses dpkg --purge while apt is still present,
+# then apt itself is also removed at the end of that script).
+
+apt
+apt-utils
+apt-transport-https
+aptitude
+debconf-utils
+python3-apt
+python3-debian
+dpkg-dev
+debianutils
+tasksel
+tasksel-data

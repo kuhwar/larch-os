@@ -1,0 +1,5 @@
+# /etc/fstab — larch-os
+# /home is handled by home.mount (systemd unit), not here, so that the
+# mount is completely skipped in live/ISO mode without any device timeout.
+tmpfs  /tmp     tmpfs  defaults,nosuid,nodev  0  0
+tmpfs  /run     tmpfs  defaults,nosuid,nodev  0  0

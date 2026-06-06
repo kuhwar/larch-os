@@ -1,0 +1,57 @@
+# Kernel modules for the installer initramfs.
+# Goal: find and mount the ISO, loop-mount squashfs, set up overlayfs.
+# No FAT, no ext4, no NVMe — none of those are needed to read an optical drive.
+
+# ── Filesystem support ────────────────────────────────────────────
+isofs
+squashfs
+overlay
+loop
+
+# NLS required for isofs filename decoding
+nls_utf8
+nls_cp437
+nls_ascii
+
+# ── Virtio core — must load BEFORE virtio_blk / virtio_scsi ──────
+virtio
+virtio_ring
+virtio_pci_legacy_dev
+virtio_pci_modern_dev
+virtio_pci
+
+# ── SCSI core — must load BEFORE sr_mod / sd_mod / virtio_scsi ───
+scsi_common
+scsi_mod
+
+# ── Optical + storage drivers ─────────────────────────────────────
+virtio_blk
+virtio_scsi
+libata
+libahci
+ahci
+ata_piix
+cdrom
+sr_mod
+sd_mod
+uas
+usb_storage
+
+# ── USB host controllers ──────────────────────────────────────────
+xhci_hcd
+xhci_pci
+ehci_pci
+uhci_hcd
+
+# ── Input (emergency shell) ───────────────────────────────────────
+usbhid
+hid_generic
+evdev
+
+# ── Target disk filesystems (needed to mount partitions after formatting) ─────
+vfat
+fat
+crc16
+mbcache
+jbd2
+ext4

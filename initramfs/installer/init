@@ -1,0 +1,117 @@
+#!/bin/sh
+# larch-os installer initramfs init — PID 1
+#
+# Self-contained boot sequence:
+#   load modules → find ISO on optical drive → mount at /mnt/iso → exec /install.sh
+#
+# No squashfs, no overlayfs, no systemd. /install.sh is baked into this initramfs.
+# When install.sh finishes it calls reboot -f.
+set -e
+
+log()  { echo "[larch-installer] $*" > /dev/console; }
+die()  { echo "[larch-installer] FATAL: $*" > /dev/console; emergency_shell; }
+
+emergency_shell() {
+    log "Emergency shell — type 'exit' to attempt to continue"
+    exec sh < /dev/console > /dev/console 2>&1
+}
+
+load_mod() {
+    modprobe "$1" 2>/dev/null && log "  [mod] $1" || log "  [mod] SKIP: $1"
+}
+
+# ── Early setup ───────────────────────────────────────────────────────────────
+
+mount -t proc     proc     /proc
+mount -t sysfs    sysfs    /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || mdev -s
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts 2>/dev/null || true
+
+exec 0</dev/console 1>/dev/console 2>/dev/console
+log "larch-os installer initramfs starting"
+
+# ── Load kernel modules ───────────────────────────────────────────────────────
+
+log "Loading modules..."
+
+load_mod virtio;             load_mod virtio_ring
+load_mod virtio_pci_legacy_dev; load_mod virtio_pci_modern_dev; load_mod virtio_pci
+load_mod scsi_common;        load_mod scsi_mod
+load_mod virtio_blk;         load_mod virtio_scsi
+load_mod libata;             load_mod libahci;  load_mod ahci; load_mod ata_piix
+load_mod cdrom;              load_mod sr_mod;   load_mod sd_mod
+load_mod usb_storage;        load_mod uas
+load_mod xhci_hcd;           load_mod xhci_pci; load_mod ehci_pci; load_mod uhci_hcd
+load_mod usbhid;             load_mod hid_generic; load_mod evdev
+load_mod isofs;              load_mod loop
+load_mod nls_utf8;           load_mod nls_cp437; load_mod nls_ascii
+# Target disk filesystems (for mounting after formatting)
+load_mod fat;                load_mod vfat
+load_mod crc16;              load_mod mbcache; load_mod jbd2; load_mod ext4
+
+log "Modules loaded"
+
+# ── Settle devices ────────────────────────────────────────────────────────────
+# Wait up to 10s for at least one block device to appear.
+# devtmpfs auto-creates device nodes as modules probe hardware, but there is
+# always a small race between modprobe returning and the node appearing.
+
+log "Waiting for storage devices to appear..."
+i=0
+while [ $i -lt 10 ]; do
+    ls /dev/sr0 /dev/sda /dev/vda /dev/nvme0n1 /dev/hda 2>/dev/null | grep -q . && break
+    sleep 1
+    i=$((i+1))
+done
+log "  /dev contents: $(ls /dev/ 2>/dev/null | tr '\n' ' ' || true)"
+
+# ── Find the larch-os ISO ─────────────────────────────────────────────────────
+# Strategy 1: blkid label lookup — grub-mkrescue sets volid LARCHOS on the ISO.
+#   Works for optical drive, USB stick, or any other interface.
+# Strategy 2: mount-probe every sr* device — fallback for blkid failures.
+
+log "Searching for larch-os ISO (LABEL=LARCHOS)..."
+ISO_DEV=""
+mkdir -p /mnt/iso
+
+# Strategy 1: blkid
+ISO_DEV="$(blkid -L LARCHOS 2>/dev/null || true)"
+if [ -b "$ISO_DEV" ]; then
+    log "  blkid found: $ISO_DEV"
+    if ! mount -r -t iso9660 "$ISO_DEV" /mnt/iso 2>/dev/null; then
+        log "  WARNING: mount failed for $ISO_DEV — falling back to scan"
+        ISO_DEV=""
+    fi
+fi
+
+# Strategy 2: scan optical drives
+if [ ! -b "$ISO_DEV" ]; then
+    for dev in $(ls /dev/sr[0-9]* /dev/cdrom /dev/dvd 2>/dev/null || true); do
+        [ -b "$dev" ] || continue
+        log "  probing $dev"
+        if mount -r -t iso9660 "$dev" /mnt/iso 2>/dev/null; then
+            if [ -f /mnt/iso/larch-os/initramfs.img ]; then
+                log "  ISO found on $dev"
+                ISO_DEV="$dev"
+                break
+            fi
+            log "  mounted $dev but larch-os/initramfs.img not found — wrong disc"
+            umount /mnt/iso 2>/dev/null || true
+        else
+            log "  mount failed for $dev"
+        fi
+    done
+fi
+
+if [ ! -b "$ISO_DEV" ]; then
+    log "  Block devices visible: $(ls /dev/sd? /dev/sr? /dev/vd? /dev/nvme?n? 2>/dev/null | tr '\n' ' ' || true)"
+    die "No larch-os ISO found (tried blkid LARCHOS + optical scan)"
+fi
+
+log "ISO mounted from $ISO_DEV — starting installer"
+
+# ── Run installer ─────────────────────────────────────────────────────────────
+# /install.sh is baked into this initramfs. It reads OS files from /mnt/iso
+# and writes them to the target disk. It calls reboot -f when done.
+exec /install.sh

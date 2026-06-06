@@ -1,0 +1,51 @@
+# Kernel modules for the fat OS initramfs.
+# rootfs.squashfs is embedded in this initramfs — no disk access needed for the OS root.
+# Storage drivers are required to find and mount the LARCHOS FAT32 partition
+# so the init script can apply the user config (hostname, passwd, shadow, etc.)
+# on every boot.
+
+squashfs
+loop
+overlay
+
+# ── Filesystems (LARCHOS FAT32 config partition) ──────────────────
+fat
+vfat
+nls_utf8
+nls_cp437
+nls_ascii
+
+# ── VirtIO block (QEMU/KVM) ───────────────────────────────────────
+virtio
+virtio_ring
+virtio_pci_legacy_dev
+virtio_pci_modern_dev
+virtio_pci
+virtio_blk
+virtio_scsi
+scsi_common
+scsi_mod
+
+# ── SATA / AHCI ───────────────────────────────────────────────────
+libata
+libahci
+ahci
+ata_piix
+
+# ── NVMe ──────────────────────────────────────────────────────────
+nvme
+nvme_core
+
+# ── USB storage (thumb drives / external SATA adapters) ───────────
+sd_mod
+usb_storage
+uas
+xhci_hcd
+xhci_pci
+ehci_pci
+uhci_hcd
+
+# ── Input (emergency shell) ───────────────────────────────────────
+usbhid
+hid_generic
+evdev

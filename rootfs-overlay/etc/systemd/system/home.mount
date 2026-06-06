@@ -1,0 +1,27 @@
+[Unit]
+Description=Persistent Home Partition (LARCHHOME)
+Documentation=man:systemd.mount(5)
+
+# ConditionPathExists: if /dev/disk/by-label/LARCHHOME does not exist
+# (live/ISO mode — no home partition on disk) this unit is silently
+# SKIPPED.  No device wait, no timeout message, no error.
+#
+# On an installed system udev creates that symlink during early boot;
+# After=systemd-udev-settle.service ensures udev has finished scanning
+# before the condition is evaluated, so the symlink is present in time.
+ConditionPathExists=/dev/disk/by-label/LARCHHOME
+
+After=systemd-udev-settle.service
+DefaultDependencies=no
+Conflicts=umount.target
+Before=local-fs.target umount.target
+
+[Mount]
+What=/dev/disk/by-label/LARCHHOME
+Where=/home
+Type=ext4
+Options=defaults,relatime
+TimeoutSec=10
+
+[Install]
+WantedBy=local-fs.target

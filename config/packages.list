@@ -1,0 +1,118 @@
+# larch-os package list — installed via debootstrap second-stage
+# Lines starting with # are comments; blank lines are ignored.
+# Processed by scripts/setup-chroot.sh
+
+# ── Base / boot ──────────────────────────────────────────────────────────────
+linux-image-amd64
+systemd
+systemd-sysv
+udev
+dbus
+dbus-user-session
+libpam-systemd
+busybox-static
+bash
+coreutils
+util-linux
+procps
+findutils
+grep
+sed
+gawk
+tar
+gzip
+bzip2
+xz-utils
+zstd
+iproute2
+iputils-ping
+less
+file
+which
+mount
+kmod
+pciutils
+usbutils
+dmidecode
+lsof
+strace
+vim-tiny
+nano
+curl
+wget
+ca-certificates
+openssl
+sudo
+login
+passwd
+adduser
+locales
+
+# ── Graphics / Wayland ───────────────────────────────────────────────────────
+xwayland
+mesa-vulkan-drivers
+libgl1-mesa-dri
+libgles2
+libdrm2
+libgbm1
+libegl1
+libwayland-client0
+libwayland-server0
+
+# ── GNOME desktop ────────────────────────────────────────────────────────────
+gnome-shell
+gdm3
+gnome-session
+gnome-settings-daemon
+gnome-keyring
+gnome-control-center
+gnome-tweaks
+gnome-backgrounds
+gnome-themes-extra
+adwaita-icon-theme
+nautilus
+gnome-terminal
+gvfs
+gvfs-backends
+gvfs-fuse
+eog
+evince
+gedit
+
+# ── Flatpak / portals ────────────────────────────────────────────────────────
+flatpak
+xdg-desktop-portal
+xdg-desktop-portal-gnome
+xdg-utils
+xdg-user-dirs
+
+# ── Audio ────────────────────────────────────────────────────────────────────
+pipewire
+pipewire-pulse
+pipewire-alsa
+wireplumber
+libspa-0.2-bluetooth
+libspa-0.2-jack
+
+# ── Networking ───────────────────────────────────────────────────────────────
+network-manager
+network-manager-gnome
+libnm0
+wpasupplicant
+wireless-tools
+iw
+
+# ── Fonts ────────────────────────────────────────────────────────────────────
+fonts-noto
+fonts-noto-color-emoji
+fonts-dejavu
+fonts-liberation
+
+# ── Installer dependencies ───────────────────────────────────────────────────
+gdisk
+dosfstools
+e2fsprogs
+systemd-boot
+
+# ── Firmware (broad coverage for common hardware) ────────────────────────────
+firmware-linux-free

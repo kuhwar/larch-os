@@ -1,0 +1,14 @@
+# Build artifacts
+work/
+output/
+
+# ISO and intermediate images that may be written to the project root
+larch-os.iso
+*.squashfs
+*.img
+
+# QEMU test disk
+work/test-disk.img
+
+# Local Claude Code settings (machine-specific permissions)
+.claude/settings.local.json
