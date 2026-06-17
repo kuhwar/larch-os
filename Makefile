@@ -7,6 +7,18 @@ SUDO      := sudo
 BUILD     := $(SUDO) ./build.sh
 OUTPUT    := output/larch-os.iso
 
+# Make build.sh write the ISO to $(OUTPUT) so native builds, `make clean`,
+# and the test-qemu targets all agree on one path. Honour an externally set
+# LARCH_OUTPUT_ISO if the caller already exported one.
+export LARCH_OUTPUT_ISO ?= $(abspath $(OUTPUT))
+
+# QEMU display/VGA settings — overridable per machine.
+# Default is the most portable combo (no host GL). Intel/Mesa hosts can opt back
+# into virgl acceleration with:  make test-qemu QEMU_VGA=virtio QEMU_DISPLAY=gtk,gl=on
+# NVIDIA proprietary/nouveau hosts black-screen with gl=on, so it is OFF here.
+QEMU_VGA     ?= std
+QEMU_DISPLAY ?= gtk,gl=off
+
 .DEFAULT_GOAL := iso
 
 ## ── Main targets ─────────────────────────────────────────────────────────────
@@ -30,8 +42,16 @@ install-deps: ## Install required build tools on the host
 	    dosfstools \
 	    gdisk \
 	    systemd-boot \
+	    grub-common \
+	    grub-efi-amd64-bin \
+	    grub-pc-bin \
+	    busybox-static \
+	    xz-utils \
+	    zstd \
+	    gzip \
 	    ovmf \
 	    qemu-system-x86 \
+	    qemu-utils \
 	    cpio
 
 ## ── Incremental rebuild targets ──────────────────────────────────────────────
@@ -82,8 +102,8 @@ test-qemu: ## Boot larch-os.iso in QEMU with UEFI (requires ovmf + qemu)
 	    -smp 2 \
 	    -bios /usr/share/ovmf/OVMF.fd \
 	    -cdrom $(OUTPUT) \
-	    -vga virtio \
-	    -display gtk,gl=on \
+	    -vga $(QEMU_VGA) \
+	    -display $(QEMU_DISPLAY) \
 	    -device virtio-net,netdev=net0 \
 	    -netdev user,id=net0
 
@@ -100,8 +120,23 @@ test-qemu-install: ## Test installation: boot ISO + attach a blank 20G disk
 	    -bios /usr/share/ovmf/OVMF.fd \
 	    -cdrom $(OUTPUT) \
 	    -drive file=work/test-disk.img,format=qcow2,if=virtio \
-	    -vga virtio \
-	    -display gtk,gl=on \
+	    -vga $(QEMU_VGA) \
+	    -display $(QEMU_DISPLAY) \
+	    -device virtio-net,netdev=net0 \
+	    -netdev user,id=net0
+
+.PHONY: test-qemu-disk
+test-qemu-disk: ## Boot the INSTALLED disk only (no ISO) — tests the real installed system
+	@[ -f work/test-disk.img ] || { echo "No work/test-disk.img — run 'make test-qemu-install' first to install"; exit 1; }
+	qemu-system-x86_64 \
+	    -enable-kvm \
+	    -m 4G \
+	    -cpu host \
+	    -smp 2 \
+	    -bios /usr/share/ovmf/OVMF.fd \
+	    -drive file=work/test-disk.img,format=qcow2,if=virtio \
+	    -vga $(QEMU_VGA) \
+	    -display $(QEMU_DISPLAY) \
 	    -device virtio-net,netdev=net0 \
 	    -netdev user,id=net0
 

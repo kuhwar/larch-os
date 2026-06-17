@@ -4,7 +4,34 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project is
 
-**larch-os** is a build system that produces a single `larch-os.iso` — a minimal, immutable Linux distribution running GNOME Wayland on Debian Trixie. The OS root is a read-only SquashFS image; writes at runtime go to a tmpfs OverlayFS layer and are discarded on reboot. Applications are delivered exclusively via Flatpak. There is no running package manager.
+**larch-os** is a build system that produces a single `larch-os.iso` — a minimal, immutable ("atomic") Linux distribution running GNOME Wayland on Debian Trixie. The OS root is a read-only SquashFS image; writes at runtime go to a tmpfs OverlayFS layer and are discarded on reboot. Applications are delivered exclusively via Flatpak. There is no running package manager.
+
+## Project goal & design principles
+
+The end product is an **atomic, image-based distro** where the entire OS is one immutable unit and upgrades happen by swapping that unit — never by mutating files in place.
+
+**Boot-to-install flow.** `build.sh` / `docker-build.sh` produce `larch-os.iso`. Booting the ISO drops the user straight into the installer script (no live desktop). The installer collects exactly four things:
+
+1. hostname
+2. username
+3. password
+4. target disk
+
+It then **wipes the target disk** and creates **two partitions**:
+
+- **Partition 1 — boot/system.** Holds the bootloader, the initramfs (which embeds the entire OS as a SquashFS), and all per-machine configuration files (`fstab`, `passwd`, `shadow`, `hostname`, `hosts`, `sudoers`, `username`, …).
+- **Partition 2 — home.** The user's `/home/<username>`, persistent across upgrades.
+
+**Atomic upgrade model.** A future OS version is shipped as a **new initramfs** (with its embedded SquashFS). Upgrading means replacing the initramfs on partition 1 and **re-linking the existing configuration files** — `fstab`, password, hostname, user, etc. are preserved, not regenerated. The user partition is never touched. This makes upgrades atomic and trivially rollback-able, and keeps all machine state on partition 1's config files rather than baked into the OS image.
+
+**Deliberately minimal, locked-down configuration.** The system favors zero-decision defaults over flexibility:
+
+- **Networking is always DHCP** with DNS provided by DHCP. No network configuration UI/flow.
+- **Single fixed user.** The account created at install time is the only user. There is **no facility to add or remove users** afterward — user management is intentionally absent.
+- **Core desktop only:** base GNOME (Wayland), **Nautilus** as the file manager, and **GNOME Terminal**. Nothing beyond the minimal desktop ships in the core image.
+- **No package manager.** Software is installed solely via the **`flatpak` CLI** against Flathub. The base OS cannot be modified by the user; only Flatpak apps and `/home` change.
+
+When implementing features, default to the most minimal, opinionated, immutable option consistent with these principles. Anything that would let the user mutate the base OS, add a second user, or hand-configure networking runs against the project's intent.
 
 ## Build commands
 

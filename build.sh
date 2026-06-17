@@ -107,7 +107,7 @@ build_initramfs() {
     cp "$busybox_bin" "$build_dir/bin/busybox"
     chmod +x "$build_dir/bin/busybox"
     for applet in sh ash bash cat cp echo grep ls mkdir mount modprobe \
-                  mknod sleep switch_root umount uname blkid find udevadm \
+                  mknod sleep switch_root umount uname blkid findfs find udevadm \
                   sed awk cut tr head tail \
                   chmod chown id stty sync lsblk reboot; do
         ln -sf busybox "$build_dir/bin/$applet" 2>/dev/null || true
@@ -170,16 +170,20 @@ build_initramfs() {
     rm -f "$out_file"
     if [ -f "$build_dir/rootfs.squashfs" ]; then
         # Two-pass pack: squashfs is already zstd-compressed, re-gzipping wastes CPU.
-        # Pass 1 — gzip-compress everything except the squashfs (busybox, modules, init).
-        # Pass 2 — append squashfs as a raw (uncompressed) cpio archive.
-        # The Linux kernel merges concatenated cpio archives transparently, regardless
-        # of whether each section is compressed or raw.
-        info "[$label] Pass 1: compressing base files"
-        (cd "$build_dir" && find . ! -name "rootfs.squashfs" | \
-            cpio --create --format=newc --quiet) | gzip -9 > "$out_file"
-        info "[$label] Pass 2: appending rootfs.squashfs raw (pre-compressed)"
+        # ORDER MATTERS: the raw (uncompressed) cpio MUST come first, the gzip cpio
+        # second. This is the kernel's documented early-cpio concatenation pattern
+        # (same as early microcode): it unpacks the leading raw cpio, skips its zero
+        # padding, then detects and decompresses the trailing gzip archive.
+        # The reverse order (gzip first, raw second) fails with
+        # "Initramfs unpacking failed: invalid magic at start of compressed archive"
+        # because after a compressed segment the kernel's input pointer does not land
+        # cleanly on the next archive.
+        info "[$label] Pass 1: appending rootfs.squashfs raw (pre-compressed)"
         (cd "$build_dir" && echo "./rootfs.squashfs" | \
-            cpio --create --format=newc --quiet) >> "$out_file"
+            cpio --create --format=newc --quiet) > "$out_file"
+        info "[$label] Pass 2: compressing base files"
+        (cd "$build_dir" && find . ! -name "rootfs.squashfs" | \
+            cpio --create --format=newc --quiet) | gzip -9 >> "$out_file"
     else
         (cd "$build_dir" && find . | cpio --create --format=newc --quiet) | \
             gzip -9 > "$out_file"
@@ -210,9 +214,15 @@ mkdir -p "$WORK_DIR"
 run_stage 1 "check-deps" && {
     info "Checking required host tools"
     MISSING=()
-    for cmd in debootstrap mksquashfs xorriso cpio find; do
+    # grub-mkrescue (stage 9), busybox (stage 7 initramfs), xz (stage 7 module
+    # decompression) and gzip (stage 7 cpio packing) are needed just as much as
+    # the rootfs tools below — check them all here so the build fails fast.
+    for cmd in debootstrap mksquashfs xorriso cpio find grub-mkrescue xz gzip; do
         command -v "$cmd" &>/dev/null || MISSING+=("$cmd")
     done
+    # busybox ships as either `busybox` or `busybox-static`
+    command -v busybox &>/dev/null || command -v busybox-static &>/dev/null || \
+        MISSING+=("busybox-static")
     # Check for systemd-boot EFI binary
     find /usr/lib/systemd/boot/efi -name "*.efi" &>/dev/null 2>&1 || \
         MISSING+=("systemd-boot EFI (install systemd-boot package)")
@@ -223,7 +233,9 @@ run_stage 1 "check-deps" && {
         for m in "${MISSING[@]}"; do echo "  - $m"; done
         echo ""
         echo "Install with:"
-        echo "  apt-get install debootstrap squashfs-tools xorriso cpio systemd-boot"
+        echo "  apt-get install debootstrap squashfs-tools xorriso cpio \\"
+        echo "      systemd-boot grub-common grub-efi-amd64-bin grub-pc-bin \\"
+        echo "      busybox-static xz-utils gzip"
         exit 1
     fi
     info "All dependencies found"

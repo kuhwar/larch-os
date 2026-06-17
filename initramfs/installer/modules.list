@@ -54,4 +54,9 @@ fat
 crc16
 mbcache
 jbd2
+# crc32c provides the "crc32c" crypto alg that ext4 loads on demand for metadata
+# checksums (mke2fs enables metadata_csum by default). It is NOT listed in ext4's
+# modules.dep because it is a runtime crypto-API soft dep — without it, ext4
+# registers but mount() fails with "Cannot load crc32c driver".
+crc32c_generic
 ext4

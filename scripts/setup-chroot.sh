@@ -86,22 +86,19 @@ EOF
 
 # ── Flatpak: add Flathub system-wide ─────────────────────────────────────────
 log "Configuring Flatpak"
-# Add Flathub as a system remote (available to all users)
+# Add Flathub as a system remote for discoverability (baked into the squashfs).
+# NOTE: this is best-effort — it needs network at build time, and system-scope
+# *app* installs land in /var/lib/flatpak, which is on the tmpfs overlay and is
+# discarded on reboot. Persistent installs must use --user (→ ~/.local/share/
+# flatpak on the LARCHHOME partition). The Flathub remote is also registered at
+# --user scope at first login by /etc/profile.d/larch-flatpak.sh.
 flatpak remote-add --system --if-not-exists flathub \
     https://dl.flathub.org/repo/flathub.flatpakrepo || \
     log "WARNING: Could not reach Flathub (network may be unavailable in build environment)"
 
-# ── PAM / polkit: allow larch user to use Flatpak portal ─────────────────────
-log "Configuring polkit for Flatpak"
-mkdir -p /etc/polkit-1/rules.d
-cat > /etc/polkit-1/rules.d/99-larch-flatpak.rules <<'EOF'
-polkit.addRule(function(action, subject) {
-    if (action.id.indexOf("org.freedesktop.Flatpak") == 0 &&
-        subject.user == "larch") {
-        return polkit.Result.YES;
-    }
-});
-EOF
+# polkit rule for Flatpak and the skel ~/.bashrc Flatpak snippet are shipped as
+# static files via rootfs-overlay/ (etc/polkit-1/rules.d/99-larch-flatpak.rules
+# and etc/skel/.bashrc), per the project convention for system config files.
 
 # ── NetworkManager: manage all interfaces ────────────────────────────────────
 log "Configuring NetworkManager"

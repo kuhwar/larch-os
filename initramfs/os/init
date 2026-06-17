@@ -110,14 +110,42 @@ log "Settling devices..."
 udevadm settle 2>/dev/null || sleep 2
 
 mkdir -p /mnt/config
-LARCHOS_DEV="$(blkid -L LARCHOS 2>/dev/null || true)"
 
-if [ -b "$LARCHOS_DEV" ]; then
-    log "Found LARCHOS at $LARCHOS_DEV — applying config"
-    mount -r -t vfat -o noatime "$LARCHOS_DEV" /mnt/config || {
-        log "WARNING: could not mount LARCHOS — booting with defaults"
-        LARCHOS_DEV=""
-    }
+# Locate the LARCHOS config partition and mount it read-only at /mnt/config.
+# IMPORTANT: the Debian busybox build has NO `blkid` applet, so a `blkid -L`
+# lookup silently returns nothing. Use `findfs` (which IS present) for the label
+# lookup, then fall back to mount-probing every partition for the config marker
+# file. Verifying the marker also makes us immune to the ISO (iso9660, volid
+# LARCHOS) — its vfat mount fails and it has no larch-os/passwd anyway.
+# On success this leaves /mnt/config mounted and LARCHOS_DEV set; else empty.
+LARCHOS_DEV=""
+
+try_config_dev() {
+    _d="$1"
+    [ -b "$_d" ] || return 1
+    mount -r -t vfat -o noatime "$_d" /mnt/config 2>/dev/null || return 1
+    if [ -e /mnt/config/larch-os/passwd ] || [ -e /mnt/config/larch-os/hostname ]; then
+        LARCHOS_DEV="$_d"
+        return 0
+    fi
+    umount /mnt/config 2>/dev/null || true
+    return 1
+}
+
+# 1) label lookup via findfs
+_cand="$(findfs LABEL=LARCHOS 2>/dev/null || true)"
+if [ -n "$_cand" ] && try_config_dev "$_cand"; then
+    log "Found LARCHOS at $LARCHOS_DEV (findfs) — applying config"
+fi
+
+# 2) fallback: scan every partition for the larch-os config marker
+if [ -z "$LARCHOS_DEV" ]; then
+    for _d in $(ls /dev/vd*[0-9] /dev/sd*[0-9] /dev/nvme*p[0-9]* /dev/mmcblk*p[0-9]* 2>/dev/null || true); do
+        if try_config_dev "$_d"; then
+            log "Found LARCHOS at $LARCHOS_DEV (scan) — applying config"
+            break
+        fi
+    done
 fi
 
 if [ -b "$LARCHOS_DEV" ]; then
@@ -164,6 +192,10 @@ if [ -b "$LARCHOS_DEV" ]; then
     if [ "$USERNAME" != "larch" ]; then
         mkdir -p /mnt/root/etc
         sed "s/\blarch\b/$USERNAME/g" /mnt/squashfs/etc/group > /mnt/root/etc/group || true
+        # Hide the build-time default user's home (/home/larch from the squashfs).
+        # rm against the overlay mount records a whiteout in the tmpfs upper layer;
+        # the read-only squashfs lower layer is untouched. Live mode keeps /home/larch.
+        rm -rf "/mnt/root/home/larch" 2>/dev/null || true
     fi
 
     # /etc/sudoers.d/larch-os-user

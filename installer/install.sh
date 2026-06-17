@@ -57,6 +57,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# mount_or_die <fstype> <device> <mountpoint>
+# busybox `mount` without an explicit -t relies on probing /proc/filesystems,
+# which is unreliable for freshly-formatted partitions — always pass the type.
+mount_or_die() {
+    _fstype="$1"; _dev="$2"; _mnt="$3"
+    mount -t "$_fstype" "$_dev" "$_mnt" && return 0
+    info "Kernel filesystems available: $(tr '\n' ' ' < /proc/filesystems)"
+    die "Failed to mount $_dev at $_mnt as $_fstype — is the '$_fstype' kernel module loaded? (check the '[mod]' lines above for SKIP)"
+}
+
 # ── Argument parsing ──────────────────────────────────────────────────────────
 
 while [ $# -gt 0 ]; do
@@ -231,7 +241,7 @@ info "Formatting OS partition as FAT32 ($PART1)"
 /usr/sbin/mkdosfs -F 32 -n LARCHOS "$PART1"
 
 mkdir -p "$MOUNT_OS"
-mount "$PART1" "$MOUNT_OS"
+mount_or_die vfat "$PART1" "$MOUNT_OS"
 
 info "Installing EFI binary"
 mkdir -p "$MOUNT_OS/EFI/BOOT"
@@ -268,11 +278,15 @@ sync
 
 mkdir -p "$MOUNT_HOME"
 info "Seeding home partition for $LARCH_USERNAME"
-mount -t ext4 "$PART2" "$MOUNT_HOME" || die "mount $PART2 -> $MOUNT_HOME failed"
-mkdir -p "$MOUNT_HOME/$LARCH_USERNAME"
-cp -a /etc/skel/. "$MOUNT_HOME/$LARCH_USERNAME/" 2>/dev/null || true
-chown -R 1000:1000 "$MOUNT_HOME/$LARCH_USERNAME"
-chmod 0750 "$MOUNT_HOME/$LARCH_USERNAME"
+mount_or_die ext4 "$PART2" "$MOUNT_HOME"
+# LARCHHOME is mounted directly at /home/<username> at runtime, so seed /etc/skel
+# into the partition ROOT — NOT a /<username> subdir, which would surface as the
+# nested /home/<username>/<username>.
+cp -a /etc/skel/. "$MOUNT_HOME/" 2>/dev/null || true
+chown -R 1000:1000 "$MOUNT_HOME"
+# Keep lost+found owned by root so fsck is happy; the home root itself is the user's.
+chown 0:0 "$MOUNT_HOME/lost+found" 2>/dev/null || true
+chmod 0750 "$MOUNT_HOME"
 sync
 umount "$MOUNT_HOME"
 

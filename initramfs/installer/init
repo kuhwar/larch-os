@@ -48,7 +48,11 @@ load_mod isofs;              load_mod loop
 load_mod nls_utf8;           load_mod nls_cp437; load_mod nls_ascii
 # Target disk filesystems (for mounting after formatting)
 load_mod fat;                load_mod vfat
-load_mod crc16;              load_mod mbcache; load_mod jbd2; load_mod ext4
+load_mod crc16;              load_mod mbcache; load_mod jbd2
+# crc32c_generic must load BEFORE ext4 mounts: ext4 needs the "crc32c" crypto
+# alg for metadata checksums and otherwise fails with "Cannot load crc32c driver".
+load_mod crc32c_generic
+load_mod ext4
 
 log "Modules loaded"
 

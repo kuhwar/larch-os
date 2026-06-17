@@ -41,8 +41,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rsync \
     # busybox-static for initramfs
     busybox-static \
-    # xz-utils to decompress .ko.xz modules for busybox modprobe compatibility
+    # xz-utils / zstd to decompress .ko.xz / .ko.zst modules for busybox modprobe
     xz-utils \
+    zstd \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build

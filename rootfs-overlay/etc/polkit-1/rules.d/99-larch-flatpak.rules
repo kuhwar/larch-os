@@ -1,0 +1,14 @@
+// larch-os — allow the locally-seated active desktop user to drive Flatpak
+// without a password prompt. Keyed on an active local session rather than a
+// hardcoded username, because the installed user is chosen at install time
+// (the build-time default 'larch' is replaced). larch-os is single-user, so an
+// active local session is the right authority.
+//
+// NOTE: per-user `--user` Flatpak installs do not require this at all; it only
+// covers any system-scope Flatpak actions.
+polkit.addRule(function(action, subject) {
+    if (action.id.indexOf("org.freedesktop.Flatpak") == 0 &&
+        subject.local && subject.active) {
+        return polkit.Result.YES;
+    }
+});
