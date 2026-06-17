@@ -7,6 +7,7 @@ isofs
 squashfs
 overlay
 loop
+exfat
 
 # NLS required for isofs filename decoding
 nls_utf8
@@ -19,6 +20,10 @@ virtio_ring
 virtio_pci_legacy_dev
 virtio_pci_modern_dev
 virtio_pci
+
+# ── NVMe ─────────────────────────────────────────────────────────
+nvme_core
+nvme
 
 # ── SCSI core — must load BEFORE sr_mod / sd_mod / virtio_scsi ───
 scsi_common

@@ -39,6 +39,7 @@ load_mod virtio;             load_mod virtio_ring
 load_mod virtio_pci_legacy_dev; load_mod virtio_pci_modern_dev; load_mod virtio_pci
 load_mod scsi_common;        load_mod scsi_mod
 load_mod virtio_blk;         load_mod virtio_scsi
+load_mod nvme_core;          load_mod nvme
 load_mod libata;             load_mod libahci;  load_mod ahci; load_mod ata_piix
 load_mod cdrom;              load_mod sr_mod;   load_mod sd_mod
 load_mod usb_storage;        load_mod uas
@@ -47,7 +48,7 @@ load_mod usbhid;             load_mod hid_generic; load_mod evdev
 load_mod isofs;              load_mod loop
 load_mod nls_utf8;           load_mod nls_cp437; load_mod nls_ascii
 # Target disk filesystems (for mounting after formatting)
-load_mod fat;                load_mod vfat
+load_mod fat;                load_mod vfat;     load_mod exfat
 load_mod crc16;              load_mod mbcache; load_mod jbd2
 # crc32c_generic must load BEFORE ext4 mounts: ext4 needs the "crc32c" crypto
 # alg for metadata checksums and otherwise fails with "Cannot load crc32c driver".
@@ -108,9 +109,46 @@ if [ ! -b "$ISO_DEV" ]; then
     done
 fi
 
+# Strategy 3: Ventoy / USB-file boot — GRUB's loopback loads the kernel and
+# initramfs from the ISO but does not expose the ISO as a Linux block device.
+# Find the ISO file on any FAT/exFAT partition and loop-mount it.
+if [ ! -b "$ISO_DEV" ]; then
+    log "Scanning FAT/exFAT partitions for an ISO file (Ventoy support)..."
+    mkdir -p /mnt/vtmp
+    for part in $(ls /dev/sd?? /dev/vd?? /dev/nvme?n?p? /dev/mmcblk?p? 2>/dev/null || true); do
+        [ -b "$part" ] || continue
+        [ -b "$ISO_DEV" ] && break
+        mount -r -t vfat  "$part" /mnt/vtmp 2>/dev/null || \
+        mount -r -t exfat "$part" /mnt/vtmp 2>/dev/null || continue
+        while IFS= read -r iso_file; do
+            [ -n "$iso_file" ] || continue
+            log "  Probing: $iso_file"
+            loop=$(losetup -f 2>/dev/null || true)
+            [ -n "$loop" ] || continue
+            if losetup -r "$loop" "$iso_file" 2>/dev/null && \
+               mount -r -t iso9660 "$loop" /mnt/iso 2>/dev/null; then
+                if [ -f /mnt/iso/larch-os/initramfs.img ]; then
+                    log "  larch-os payload confirmed — using $loop"
+                    ISO_DEV="$loop"
+                    break
+                fi
+                umount /mnt/iso 2>/dev/null || true
+            fi
+            losetup -d "$loop" 2>/dev/null || true
+        done <<ISO_LIST
+$(find /mnt/vtmp -maxdepth 4 -name "*.iso" 2>/dev/null || true)
+ISO_LIST
+        if [ -b "$ISO_DEV" ]; then
+            break
+        else
+            umount /mnt/vtmp 2>/dev/null || true
+        fi
+    done
+fi
+
 if [ ! -b "$ISO_DEV" ]; then
     log "  Block devices visible: $(ls /dev/sd? /dev/sr? /dev/vd? /dev/nvme?n? 2>/dev/null | tr '\n' ' ' || true)"
-    die "No larch-os ISO found (tried blkid LARCHOS + optical scan)"
+    die "No larch-os ISO found (tried blkid LARCHOS + optical scan + Ventoy USB scan)"
 fi
 
 log "ISO mounted from $ISO_DEV — starting installer"

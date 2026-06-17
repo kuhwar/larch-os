@@ -93,15 +93,15 @@ docker-clean: ## Remove output/ and work/ directories
 ## ── Testing ──────────────────────────────────────────────────────────────────
 
 .PHONY: test-qemu
-test-qemu: ## Boot larch-os.iso in QEMU with UEFI (requires ovmf + qemu)
-	@[ -f "$(OUTPUT)" ] || { echo "Run 'make iso' first"; exit 1; }
+test-qemu: ## Boot installed disk in QEMU with UEFI (run test-qemu-install first)
+	@[ -f work/test-disk.img ] || { echo "No work/test-disk.img — run 'make test-qemu-install' first to install"; exit 1; }
 	qemu-system-x86_64 \
 	    -enable-kvm \
 	    -m 4G \
 	    -cpu host \
 	    -smp 2 \
 	    -bios /usr/share/ovmf/OVMF.fd \
-	    -cdrom $(OUTPUT) \
+	    -drive file=work/test-disk.img,format=qcow2,if=virtio \
 	    -vga $(QEMU_VGA) \
 	    -display $(QEMU_DISPLAY) \
 	    -device virtio-net,netdev=net0 \
