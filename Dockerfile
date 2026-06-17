@@ -1,7 +1,7 @@
-# larch-os builder image
+# larch-os builder image — Alpine edge base
 # Provides all host-side build dependencies.
 # The container must be run with --privileged because the build uses:
-#   - debootstrap (needs mknod to create /dev nodes in the chroot)
+#   - apk --root (needs mknod to create /dev nodes in the chroot)
 #   - mount --bind (proc/sys/dev into the chroot)
 #   - chroot itself
 #
@@ -11,12 +11,14 @@
 #       -v "$(pwd)/output:/output" \
 #       larch-os-builder
 
-FROM debian:trixie-slim
+FROM alpine:edge
 
-# Install all build-time tools in one layer
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    # rootfs bootstrap
-    debootstrap \
+# Enable community repo (GNOME, systemd-boot, flatpak, etc.)
+RUN echo "https://dl-cdn.alpinelinux.org/alpine/edge/main" > /etc/apk/repositories && \
+    echo "https://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repositories && \
+    apk update
+
+RUN apk add --no-cache \
     # squashfs compression
     squashfs-tools \
     # ISO creation
@@ -24,27 +26,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # FAT image manipulation (for EFI boot image)
     mtools \
     dosfstools \
-    # GPT partitioning (needed by installer, not build)
-    gdisk \
+    # GPT partitioning
+    gptfdisk \
     # systemd-boot EFI binary (for installed-to-disk systems)
     systemd-boot \
     # GRUB2 — used for ISO/live boot (has ISO9660 driver; systemd-boot does not)
-    grub-common \
-    grub-efi-amd64-bin \
-    grub-pc-bin \
+    grub grub-efi grub-bios \
     # initramfs packing
     cpio \
     gzip \
     # misc utilities used by build.sh
+    bash \
     ca-certificates \
     curl \
     rsync \
     # busybox-static for initramfs
     busybox-static \
-    # xz-utils / zstd to decompress .ko.xz / .ko.zst modules for busybox modprobe
-    xz-utils \
+    # xz / zstd to decompress .ko.xz / .ko.zst modules for busybox modprobe
+    xz \
     zstd \
-  && rm -rf /var/lib/apt/lists/*
+    # apk is natively available on Alpine — used in stage 2 to bootstrap the rootfs
+    apk-tools
 
 WORKDIR /build
 

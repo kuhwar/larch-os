@@ -1,16 +1,12 @@
-# larch-os package list — installed via debootstrap second-stage
+# larch-os package list — installed via apk inside Alpine chroot
 # Lines starting with # are comments; blank lines are ignored.
 # Processed by scripts/setup-chroot.sh
 
-# ── Base / boot ──────────────────────────────────────────────────────────────
-linux-image-amd64
-systemd
-systemd-sysv
-udev
+# ── Base / boot ───────────────────────────────────────────────────────────────
+linux-lts
+openrc
+eudev
 dbus
-dbus-user-session
-libpam-systemd
-busybox-static
 bash
 coreutils
 util-linux
@@ -21,98 +17,85 @@ sed
 gawk
 tar
 gzip
-bzip2
-xz-utils
+xz
 zstd
 iproute2
-iputils-ping
+iputils
 less
-file
 which
-mount
 kmod
 pciutils
 usbutils
-dmidecode
 lsof
-strace
-vim-tiny
+vim
 nano
 curl
 wget
 ca-certificates
 openssl
 sudo
-login
-passwd
-adduser
-locales
+shadow
+tzdata
 
-# ── Graphics / Wayland ───────────────────────────────────────────────────────
+# ── Graphics / Wayland ────────────────────────────────────────────────────────
 xwayland
-mesa-vulkan-drivers
-libgl1-mesa-dri
-libgles2
-libdrm2
-libgbm1
-libegl1
-libwayland-client0
-libwayland-server0
+mesa-dri-gallium
+mesa-vulkan-intel
+mesa-vulkan-ati
+libdrm
+wayland
+wayland-protocols
 
-# ── GNOME desktop ────────────────────────────────────────────────────────────
+# ── GNOME desktop ─────────────────────────────────────────────────────────────
 gnome-shell
-gdm3
+gdm
 gnome-session
 gnome-settings-daemon
 gnome-keyring
 gnome-control-center
 gnome-tweaks
 gnome-backgrounds
-gnome-themes-extra
 adwaita-icon-theme
 nautilus
 gnome-terminal
 gvfs
-gvfs-backends
 gvfs-fuse
 eog
 evince
-gedit
 
-# ── Flatpak / portals ────────────────────────────────────────────────────────
+# ── Flatpak / portals ─────────────────────────────────────────────────────────
 flatpak
 xdg-desktop-portal
 xdg-desktop-portal-gnome
 xdg-utils
 xdg-user-dirs
 
-# ── Audio ────────────────────────────────────────────────────────────────────
+# ── Audio ─────────────────────────────────────────────────────────────────────
 pipewire
 pipewire-pulse
 pipewire-alsa
 wireplumber
-libspa-0.2-bluetooth
-libspa-0.2-jack
 
-# ── Networking ───────────────────────────────────────────────────────────────
-network-manager
-network-manager-gnome
-libnm0
-wpasupplicant
+# ── Networking ────────────────────────────────────────────────────────────────
+networkmanager
+networkmanager-wifi
+wpa_supplicant
 wireless-tools
-iw
 
-# ── Fonts ────────────────────────────────────────────────────────────────────
-fonts-noto
-fonts-noto-color-emoji
-fonts-dejavu
-fonts-liberation
+# ── Fonts ─────────────────────────────────────────────────────────────────────
+font-dejavu
+font-noto
+font-noto-emoji
+font-liberation
 
-# ── Installer dependencies ───────────────────────────────────────────────────
-gdisk
+# ── Installer / boot dependencies ─────────────────────────────────────────────
+gptfdisk
 dosfstools
 e2fsprogs
+# systemd-boot provides the bootx64.efi EFI binary for the installed-disk bootloader.
+# The binary is copied to the ISO by stage 8; it is NOT used at runtime on Alpine
+# (which uses OpenRC, not systemd). Only the EFI file is needed.
 systemd-boot
 
-# ── Firmware (broad coverage for common hardware) ────────────────────────────
-firmware-linux-free
+# ── Firmware ──────────────────────────────────────────────────────────────────
+linux-firmware

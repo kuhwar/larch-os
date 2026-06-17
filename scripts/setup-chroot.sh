@@ -1,18 +1,25 @@
 #!/bin/bash
-# scripts/setup-chroot.sh — runs INSIDE the chroot after debootstrap
+# scripts/setup-chroot.sh — runs INSIDE the Alpine chroot after bootstrap
 # Called by build.sh as: chroot work/rootfs /setup-chroot.sh
-# The script is bind-mounted into the chroot at /setup-chroot.sh before execution.
 
 set -euo pipefail
 
 log() { echo "  [chroot] $*"; }
 
-# ── Locale & timezone ────────────────────────────────────────────────────────
-log "Configuring locale and timezone"
-echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
-locale-gen
-echo "LANG=en_US.UTF-8" > /etc/locale.conf
+# ── Alpine repositories ───────────────────────────────────────────────────────
+log "Configuring Alpine repositories"
+cat > /etc/apk/repositories <<'EOF'
+https://dl-cdn.alpinelinux.org/alpine/edge/main
+https://dl-cdn.alpinelinux.org/alpine/edge/community
+EOF
+
+apk update -q
+
+# ── Timezone ──────────────────────────────────────────────────────────────────
+log "Configuring timezone"
+# musl handles UTF-8 natively — no locale generation needed
 ln -sf /usr/share/zoneinfo/UTC /etc/localtime
+echo "LANG=en_US.UTF-8" > /etc/locale.conf
 
 # ── Hostname & hosts ─────────────────────────────────────────────────────────
 log "Setting hostname"
@@ -23,84 +30,61 @@ cat > /etc/hosts <<'EOF'
 ::1         localhost ip6-localhost ip6-loopback
 EOF
 
-# ── Install packages from packages.list ──────────────────────────────────────
-log "Updating apt sources"
-cat > /etc/apt/sources.list <<'EOF'
-deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware
-deb http://deb.debian.org/debian trixie-updates main contrib non-free non-free-firmware
-deb http://security.debian.org/debian-security trixie-security main contrib non-free non-free-firmware
-EOF
-
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-
+# ── Install packages ──────────────────────────────────────────────────────────
 log "Installing packages (this takes a while)"
-# Read packages.list, strip comments and blank lines
 PKGS=$(grep -v '^#' /packages.list | grep -v '^[[:space:]]*$' | tr '\n' ' ')
 # shellcheck disable=SC2086
-apt-get install -y --no-install-recommends $PKGS
+apk add --no-cache $PKGS
 
-# ── User setup ───────────────────────────────────────────────────────────────
+# ── User setup ────────────────────────────────────────────────────────────────
 log "Creating default user 'larch'"
-# Create user with home directory; password is 'larch' (change before shipping)
-useradd -m -s /bin/bash -c "Larch User" larch
+adduser -D -s /bin/bash -g "Larch User" larch
 echo "larch:larch" | chpasswd
-# Allow sudo for larch user
-echo "larch ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/larch
-chmod 0440 /etc/sudoers.d/larch
-# Add to relevant groups
-usermod -aG audio,video,input,netdev,plugdev,sudo larch
 
-# ── Systemd services ─────────────────────────────────────────────────────────
-log "Enabling systemd services"
-systemctl enable gdm3
-systemctl enable NetworkManager
-systemctl set-default graphical.target
+# Ensure hardware access groups exist (some are created by packages, add missing ones)
+for grp in audio video input netdev plugdev seat; do
+    addgroup -S "$grp" 2>/dev/null || true
+done
+
+# Add to relevant groups; wheel = sudo on Alpine
+for grp in audio video input netdev plugdev wheel; do
+    adduser larch "$grp" 2>/dev/null || true
+done
+
+# Allow wheel group passwordless sudo
+echo "%wheel ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/wheel
+chmod 0440 /etc/sudoers.d/wheel
+
+# ── OpenRC services ────────────────────────────────────────────────────────────
+log "Enabling OpenRC services"
+# Boot-level services
+rc-update add dbus boot
+rc-update add udev sysinit
+rc-update add udev-trigger sysinit
+rc-update add udev-settle sysinit
+
+# Default runlevel (graphical desktop)
+rc-update add gdm default
+rc-update add networkmanager default
 
 # Disable services that conflict with immutability
-systemctl disable apt-daily.timer          2>/dev/null || true
-systemctl disable apt-daily-upgrade.timer  2>/dev/null || true
-systemctl disable unattended-upgrades      2>/dev/null || true
-systemctl disable packagekit               2>/dev/null || true
+rc-update del apk-audit 2>/dev/null || true
 
-# Enable PipeWire audio
-systemctl --global enable pipewire.socket     2>/dev/null || true
-systemctl --global enable pipewire-pulse.socket 2>/dev/null || true
-systemctl --global enable wireplumber          2>/dev/null || true
+# Enable PipeWire globally — started per-user by GNOME session manager
+# (no system service needed; wireplumber handles session routing)
 
-# ── GDM: Wayland-only ───────────/───────────────────────────────────────────
+# ── GDM: Wayland-only ─────────────────────────────────────────────────────────
 log "Configuring GDM for Wayland"
-# Ensure the Wayland session is used and X11 is not started
-mkdir -p /etc/gdm3
-cat > /etc/gdm3/custom.conf <<'EOF'
-[daemon]
-WaylandEnable=true
-DefaultSession=gnome-wayland.desktop
+mkdir -p /etc/gdm
+# custom.conf is shipped via rootfs-overlay/etc/gdm/custom.conf
 
-[security]
-
-[xdmcp]
-
-[chooser]
-EOF
-
-# ── Flatpak: add Flathub system-wide ─────────────────────────────────────────
+# ── Flatpak: add Flathub ──────────────────────────────────────────────────────
 log "Configuring Flatpak"
-# Add Flathub as a system remote for discoverability (baked into the squashfs).
-# NOTE: this is best-effort — it needs network at build time, and system-scope
-# *app* installs land in /var/lib/flatpak, which is on the tmpfs overlay and is
-# discarded on reboot. Persistent installs must use --user (→ ~/.local/share/
-# flatpak on the LARCHHOME partition). The Flathub remote is also registered at
-# --user scope at first login by /etc/profile.d/larch-flatpak.sh.
 flatpak remote-add --system --if-not-exists flathub \
     https://dl.flathub.org/repo/flathub.flatpakrepo || \
     log "WARNING: Could not reach Flathub (network may be unavailable in build environment)"
 
-# polkit rule for Flatpak and the skel ~/.bashrc Flatpak snippet are shipped as
-# static files via rootfs-overlay/ (etc/polkit-1/rules.d/99-larch-flatpak.rules
-# and etc/skel/.bashrc), per the project convention for system config files.
-
-# ── NetworkManager: manage all interfaces ────────────────────────────────────
+# ── NetworkManager ────────────────────────────────────────────────────────────
 log "Configuring NetworkManager"
 mkdir -p /etc/NetworkManager/conf.d
 cat > /etc/NetworkManager/conf.d/00-larch.conf <<'EOF'
@@ -114,22 +98,17 @@ dhcp=internal
 wifi.scan-rand-mac-address=yes
 EOF
 
-# ── Kernel / initramfs: stub (real initramfs is built externally) ─────────────
-# Just make sure the vmlinuz symlink is resolvable
+# ── Kernel check ──────────────────────────────────────────────────────────────
 log "Checking kernel installation"
-ls /boot/vmlinuz* 2>/dev/null || log "WARNING: no kernel found in /boot"
+ls /boot/vmlinuz* 2>/dev/null || ls /boot/vmlinuz 2>/dev/null || \
+    log "WARNING: no kernel found in /boot"
 
-# ── Console / TTY hardening (immutable system) ───────────────────────────────
-log "Hardening console access"
-# Disable root login on all ttys
-sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config 2>/dev/null || true
-# Lock root account
+# ── Security hardening ────────────────────────────────────────────────────────
+log "Hardening: locking root account"
 passwd -l root
 
-# ── Clean apt caches ─────────────────────────────────────────────────────────
-log "Cleaning apt caches"
-apt-get clean
-apt-get autoremove -y
-rm -rf /var/lib/apt/lists/*
+# ── Clean up ──────────────────────────────────────────────────────────────────
+log "Cleaning apk cache"
+rm -rf /var/cache/apk/*
 
 log "chroot configuration complete"

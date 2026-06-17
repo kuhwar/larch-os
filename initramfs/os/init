@@ -207,18 +207,15 @@ if [ -b "$LARCHOS_DEV" ]; then
 
     # /etc/fstab — mounts LARCHHOME at /home/<username>
     # The installer generates a fstab with a username-specific mount point.
-    # We also create the mount point directory and mask the generic home.mount
-    # unit (which mounts at /home) so systemd-fstab-generator takes over.
+    # OpenRC's localmount service picks this up after switch_root; nofail
+    # means it is skipped gracefully in live/ISO mode.
     if [ -f "$CFG/fstab" ]; then
         mkdir -p /mnt/root/etc
         cp "$CFG/fstab" /mnt/root/etc/fstab
-        # Create the mount point so systemd doesn't have to
+        # Create the mount point so OpenRC localmount doesn't have to
         mkdir -p "/mnt/root/home/$USERNAME"
         chown 1000:1000 "/mnt/root/home/$USERNAME" 2>/dev/null || true
         chmod 0750      "/mnt/root/home/$USERNAME"  2>/dev/null || true
-        # Mask home.mount — the fstab entry for /home/<username> replaces it
-        mkdir -p /mnt/root/etc/systemd/system
-        ln -sf /dev/null /mnt/root/etc/systemd/system/home.mount
         log "  fstab: LARCHHOME → /home/$USERNAME"
     fi
 
@@ -228,8 +225,8 @@ else
     log "LARCHOS not found — booting with squashfs defaults (live mode)"
 fi
 
-# /home (LABEL=LARCHHOME) is mounted by systemd via home.mount after switch_root.
-# On live/ISO systems the nofail flag means systemd skips it gracefully.
+# /home (LABEL=LARCHHOME) is mounted by OpenRC's localmount service via fstab.
+# nofail in the fstab entry means it is skipped gracefully in live/ISO mode.
 
 # ── Move pseudo-filesystems and switch root ───────────────────────────────────
 
@@ -237,5 +234,5 @@ mount --move /proc /mnt/root/proc
 mount --move /sys  /mnt/root/sys
 mount --move /dev  /mnt/root/dev
 
-log "Switching to real root → systemd"
-exec switch_root /mnt/root /lib/systemd/systemd
+log "Switching to real root → OpenRC"
+exec switch_root /mnt/root /sbin/init

@@ -32,26 +32,22 @@ clean: ## Delete work directory and output ISO
 	$(BUILD) --clean
 
 .PHONY: install-deps
-install-deps: ## Install required build tools on the host
-	apt-get update
-	apt-get install -y \
-	    debootstrap \
+install-deps: ## Install required build tools on the host (Alpine)
+	apk add --no-cache \
 	    squashfs-tools \
 	    xorriso \
 	    mtools \
 	    dosfstools \
-	    gdisk \
+	    gptfdisk \
 	    systemd-boot \
-	    grub-common \
-	    grub-efi-amd64-bin \
-	    grub-pc-bin \
+	    grub grub-efi grub-bios \
 	    busybox-static \
-	    xz-utils \
+	    xz \
 	    zstd \
 	    gzip \
 	    ovmf \
-	    qemu-system-x86 \
-	    qemu-utils \
+	    qemu-system-x86_64 \
+	    qemu-img \
 	    cpio
 
 ## ── Incremental rebuild targets ──────────────────────────────────────────────

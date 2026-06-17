@@ -3,7 +3,7 @@
 #
 # Stages:
 #   1. check-deps       — verify host tools
-#   2. debootstrap      — create Debian Bookworm minimal rootfs
+#   2. alpine-bootstrap — create Alpine edge minimal rootfs
 #   3. copy-overlay     — merge rootfs-overlay/ into rootfs
 #   4. chroot-configure — run scripts/setup-chroot.sh inside chroot
 #   5. clean-rootfs     — strip package manager (scripts/clean-rootfs.sh)
@@ -30,12 +30,9 @@ INSTALLER_INITRAMFS_FILE="$WORK_DIR/installer.img" # live/installer initramfs
 ISO_ROOT="$WORK_DIR/iso"
 OUTPUT_ISO="${LARCH_OUTPUT_ISO:-$SCRIPT_DIR/larch-os.iso}"
 
-DEBIAN_MIRROR="http://deb.debian.org/debian"
-DEBIAN_SUITE="trixie"
-DEBIAN_ARCH="amd64"
-
-# Initial debootstrap packages (bare minimum to get into chroot)
-DEBOOTSTRAP_INCLUDE="bash,ca-certificates,locales,systemd"
+ALPINE_MIRROR="https://dl-cdn.alpinelinux.org/alpine"
+ALPINE_BRANCH="edge"
+ALPINE_ARCH="x86_64"
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 START_STAGE=1
@@ -217,44 +214,56 @@ run_stage 1 "check-deps" && {
     # grub-mkrescue (stage 9), busybox (stage 7 initramfs), xz (stage 7 module
     # decompression) and gzip (stage 7 cpio packing) are needed just as much as
     # the rootfs tools below — check them all here so the build fails fast.
-    for cmd in debootstrap mksquashfs xorriso cpio find grub-mkrescue xz gzip; do
+    for cmd in apk mksquashfs xorriso cpio find grub-mkrescue xz gzip; do
         command -v "$cmd" &>/dev/null || MISSING+=("$cmd")
     done
     # busybox ships as either `busybox` or `busybox-static`
     command -v busybox &>/dev/null || command -v busybox-static &>/dev/null || \
         MISSING+=("busybox-static")
-    # Check for systemd-boot EFI binary
+    # Check for systemd-boot EFI binary (installed by systemd-boot package in builder)
     find /usr/lib/systemd/boot/efi -name "*.efi" &>/dev/null 2>&1 || \
-        MISSING+=("systemd-boot EFI (install systemd-boot package)")
+        MISSING+=("systemd-boot EFI (apk add systemd-boot)")
 
     if [ "${#MISSING[@]}" -gt 0 ]; then
         echo ""
         echo "Missing dependencies:"
         for m in "${MISSING[@]}"; do echo "  - $m"; done
         echo ""
-        echo "Install with:"
-        echo "  apt-get install debootstrap squashfs-tools xorriso cpio \\"
-        echo "      systemd-boot grub-common grub-efi-amd64-bin grub-pc-bin \\"
-        echo "      busybox-static xz-utils gzip"
+        echo "Install with (Alpine):"
+        echo "  apk add squashfs-tools xorriso cpio grub grub-efi grub-bios \\"
+        echo "      systemd-boot busybox-static xz zstd gzip gptfdisk"
         exit 1
     fi
     info "All dependencies found"
 }
 
-# ── Stage 2: debootstrap ──────────────────────────────────────────────────────
-run_stage 2 "debootstrap — create minimal Debian rootfs" && {
+# ── Stage 2: alpine-bootstrap — create minimal Alpine rootfs ──────────────────
+run_stage 2 "alpine-bootstrap — create minimal Alpine $ALPINE_BRANCH rootfs" && {
     if [ -d "$ROOTFS_DIR/usr" ]; then
-        info "Rootfs already exists, skipping debootstrap. Use --clean to restart."
+        info "Rootfs already exists, skipping bootstrap. Use --clean to restart."
     else
         mkdir -p "$ROOTFS_DIR"
-        info "Running debootstrap $DEBIAN_SUITE → $ROOTFS_DIR"
-        debootstrap \
-            --arch="$DEBIAN_ARCH" \
-            --include="$DEBOOTSTRAP_INCLUDE" \
-            "$DEBIAN_SUITE" \
-            "$ROOTFS_DIR" \
-            "$DEBIAN_MIRROR"
-        info "Debootstrap complete"
+        info "Bootstrapping Alpine $ALPINE_BRANCH ($ALPINE_ARCH) → $ROOTFS_DIR"
+
+        # Seed APK signing keys from the builder into the new rootfs
+        mkdir -p "$ROOTFS_DIR/etc/apk/keys"
+        cp /etc/apk/keys/*.pub "$ROOTFS_DIR/etc/apk/keys/" 2>/dev/null || true
+
+        # Set up repositories
+        mkdir -p "$ROOTFS_DIR/etc/apk"
+        printf '%s/%s/main\n%s/%s/community\n' \
+            "$ALPINE_MIRROR" "$ALPINE_BRANCH" \
+            "$ALPINE_MIRROR" "$ALPINE_BRANCH" \
+            > "$ROOTFS_DIR/etc/apk/repositories"
+
+        # Bootstrap the minimal Alpine base system
+        apk --arch "$ALPINE_ARCH" \
+            --root "$ROOTFS_DIR" \
+            --initdb \
+            --no-cache \
+            add alpine-base
+
+        info "Alpine bootstrap complete"
     fi
 }
 
@@ -296,7 +305,7 @@ run_stage 4 "chroot-configure — install packages and configure system" && {
 
 # ── Stage 5: clean-rootfs ─────────────────────────────────────────────────────
 run_stage 5 "clean-rootfs — strip package manager and build artifacts" && {
-    info "Running rootfs cleanup (removing apt/dpkg)"
+    info "Running rootfs cleanup (removing apk)"
     chroot_run "$SCRIPT_DIR/scripts/clean-rootfs.sh"
     info "Rootfs is now package-manager-free"
 }
@@ -341,30 +350,35 @@ run_stage 7 "build-initramfs — build installer and OS initramfs cpio archives"
     ln -sf "$(basename "$MKE2FS_BIN")" \
         "$INSTALLER_EXTRAS$(dirname "${MKE2FS_BIN#$ROOTFS_DIR}")/mkfs.ext4"
 
-    # Copy the shared libraries mke2fs needs (hardcoded for Debian amd64).
-    # Search by exact soname (no wildcard, no -type f) so that soname symlinks are
-    # found and install dereferences them — avoids copying versioned filenames that
-    # the dynamic linker won't resolve.
-    for libname in libext2fs.so.2 libe2p.so.2 libcom_err.so.2 libblkid.so.1 libuuid.so.1 libc.so.6; do
-        libpath="$(find "$ROOTFS_DIR/usr/lib" \
+    # Copy shared libraries mke2fs needs.
+    # Search /lib and /usr/lib — Alpine (musl) puts most libs in /lib,
+    # glibc distros use /usr/lib. Include both musl and glibc libc sonames.
+    for libname in libext2fs.so.2 libe2p.so.2 libcom_err.so.2 libblkid.so.1 libuuid.so.1 \
+                   libc.so.6 libc.musl-x86_64.so.1; do
+        libpath="$(find "$ROOTFS_DIR/lib" "$ROOTFS_DIR/usr/lib" \
                         -name "$libname" 2>/dev/null | head -1)"
         if [ -n "$libpath" ]; then
             install -D "$libpath" "$INSTALLER_EXTRAS${libpath#$ROOTFS_DIR}"
             info "  lib: $libname"
         else
-            info "  WARNING: $libname not found in rootfs"
+            info "  lib: $libname (not found — skipping)"
         fi
     done
-    # Dynamic linker — on Debian Trixie /lib and /lib64 are symlinks to usr/lib[64],
-    # so search usr/ directly. The ELF interpreter path baked into binaries is
-    # /lib64/ld-linux-x86-64.so.2, so install it there regardless of source path.
-    LD_PATH="$(find "$ROOTFS_DIR/usr/lib" "$ROOTFS_DIR/usr/lib64" \
-                    -name "ld-linux-x86-64.so.2" -type f 2>/dev/null | head -1)"
+    # Dynamic linker — musl uses /lib/ld-musl-x86_64.so.1,
+    # glibc uses /lib64/ld-linux-x86-64.so.2. Copy whichever is present.
+    LD_PATH="$(find "$ROOTFS_DIR/lib" -name "ld-musl-x86_64.so.1" -type f 2>/dev/null | head -1)"
     if [ -n "$LD_PATH" ]; then
-        install -D "$LD_PATH" "$INSTALLER_EXTRAS/lib64/ld-linux-x86-64.so.2"
-        info "  ld: ld-linux-x86-64.so.2"
+        install -D "$LD_PATH" "$INSTALLER_EXTRAS${LD_PATH#$ROOTFS_DIR}"
+        info "  ld: ld-musl-x86_64.so.1"
     else
-        info "  WARNING: dynamic linker not found in rootfs"
+        LD_PATH="$(find "$ROOTFS_DIR/usr/lib" "$ROOTFS_DIR/usr/lib64" \
+                        -name "ld-linux-x86-64.so.2" -type f 2>/dev/null | head -1)"
+        if [ -n "$LD_PATH" ]; then
+            install -D "$LD_PATH" "$INSTALLER_EXTRAS/lib64/ld-linux-x86-64.so.2"
+            info "  ld: ld-linux-x86-64.so.2"
+        else
+            info "  WARNING: dynamic linker not found in rootfs"
+        fi
     fi
 
     info "[installer] Copying openssl + libcrypto from rootfs (for password hashing)"
@@ -375,7 +389,7 @@ run_stage 7 "build-initramfs — build installer and OS initramfs cpio archives"
     # libssl, libcrypto, libz, libzstd — full openssl passwd dependency set.
     # Same soname-exact search as above.
     for libname in libssl.so.3 libcrypto.so.3 libz.so.1 libzstd.so.1; do
-        libpath="$(find "$ROOTFS_DIR/usr/lib" \
+        libpath="$(find "$ROOTFS_DIR/lib" "$ROOTFS_DIR/usr/lib" \
                         -name "$libname" 2>/dev/null | head -1)"
         if [ -n "$libpath" ]; then
             install -D "$libpath" "$INSTALLER_EXTRAS${libpath#$ROOTFS_DIR}"
@@ -390,8 +404,10 @@ run_stage 7 "build-initramfs — build installer and OS initramfs cpio archives"
                        -name "sfdisk" 2>/dev/null | head -1)"
     [ -n "$SFDISK_BIN" ] || die "sfdisk not found in rootfs — add util-linux to packages.list"
     install -D "$SFDISK_BIN" "$INSTALLER_EXTRAS${SFDISK_BIN#$ROOTFS_DIR}"
-    for libname in libfdisk.so.1 libsmartcols.so.1 libtinfo.so.6 libreadline.so.8; do
-        libpath="$(find "$ROOTFS_DIR/usr/lib" -name "$libname" 2>/dev/null | head -1)"
+    for libname in libfdisk.so.1 libsmartcols.so.1 libreadline.so.8 \
+                   libtinfo.so.6 libncursesw.so.6; do
+        libpath="$(find "$ROOTFS_DIR/lib" "$ROOTFS_DIR/usr/lib" \
+                        -name "$libname" 2>/dev/null | head -1)"
         if [ -n "$libpath" ]; then
             install -D "$libpath" "$INSTALLER_EXTRAS${libpath#$ROOTFS_DIR}"
             info "  lib: $libname"
@@ -459,11 +475,14 @@ run_stage 8 "assemble-iso — copy all files into ISO tree" && {
     # install.sh copies these to the target EFI partition under /larch-os/
     cp "$INITRAMFS_FILE" "$ISO_ROOT/larch-os/initramfs.img"
 
-    # systemd-boot EFI binary — install.sh places at EFI/BOOT/BOOTX64.EFI on target
+    # systemd-boot EFI binary — install.sh places at EFI/BOOT/BOOTX64.EFI on target.
+    # Prefer the copy from the rootfs (systemd-boot in packages.list); fall back to
+    # the builder host (set by the Dockerfile's systemd-boot package).
     EFI_BIN="$(find "$ROOTFS_DIR/usr/lib/systemd/boot/efi" \
+                    /usr/lib/systemd/boot/efi \
                     \( -name "systemd-bootx64.efi" -o -name "systemd-bootx64.efi.signed" \) \
                     2>/dev/null | head -1)"
-    [ -f "$EFI_BIN" ] || die "systemd-boot EFI binary not found in rootfs"
+    [ -f "$EFI_BIN" ] || die "systemd-boot EFI binary not found — install systemd-boot in builder or add to packages.list"
     cp "$EFI_BIN" "$ISO_ROOT/larch-os/bootx64.efi"
 
     # systemd-boot loader config — install.sh copies to /loader/ on target
