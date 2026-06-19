@@ -106,16 +106,17 @@ larger is plenty.
 
 Log in with the username and password you chose. To install software, use Flatpak from
 a terminal. **[Flathub](https://flathub.org/) is preconfigured as the download source**
-(the `flathub` remote in the commands below). Because only your `/home` survives, install
-apps into your user with `--user`:
+(the `flathub` remote below), and larch-os already defaults Flatpak to your **persistent
+per-user space** (the only place installs survive a reboot) — so you don't need any extra
+flags:
 
 ```bash
 # Install Chromium from Flathub
-flatpak install --user flathub org.chromium.Chromium
+flatpak install flathub org.chromium.Chromium
 
 # More examples
-flatpak install --user flathub org.mozilla.firefox
-flatpak install --user flathub org.gnome.Calculator
+flatpak install flathub org.mozilla.firefox
+flatpak install flathub org.gnome.Calculator
 ```
 
 Run them from the GNOME app grid like any other application. Browse what's available at
@@ -124,6 +125,10 @@ Run them from the GNOME app grid like any other application. Browse what's avail
 ```bash
 flatpak search chromium
 ```
+
+> Under the hood, larch-os aliases `flatpak` to `flatpak --user` so installs land in
+> `~/.local/share/flatpak` on your `/home`. (A system-wide install via `flatpak --system`
+> would be wiped on the next reboot, so avoid it.)
 
 ## How it works (and what persists)
 
