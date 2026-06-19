@@ -1,0 +1,59 @@
+name: Build ISO
+
+# Builds larch-os.iso inside the privileged Docker builder (the same
+# ./docker-build.sh used locally) and publishes it as a GitHub Release asset.
+#
+#   - Push a version tag (v*)      → build + create a Release with the ISO
+#   - Run manually (workflow_dispatch) → build + upload the ISO as a workflow
+#                                        artifact only (no Release)
+#
+# The build needs privileged Docker (chroot / mount --bind / mknod); GitHub
+# hosted ubuntu-latest runners support this.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write          # required to create Releases
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free up disk space
+        # The rootfs + squashfs + two initramfs + the ~600 MB ISO + builder
+        # image can exceed the default free space on ubuntu-latest.
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true       # reclaim ~20 GB
+          large-packages: false  # keep this step fast
+
+      - name: Build ISO (privileged Docker)
+        run: ./docker-build.sh   # docker build + docker run --privileged
+
+      - name: Prepare artifacts
+        # output/larch-os.iso is written by the privileged container as root.
+        run: |
+          sudo chown "$USER" output/larch-os.iso
+          cd output
+          sha256sum larch-os.iso > larch-os.iso.sha256
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: larch-os-iso
+          path: |
+            output/larch-os.iso
+            output/larch-os.iso.sha256
+
+      - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            output/larch-os.iso
+            output/larch-os.iso.sha256
