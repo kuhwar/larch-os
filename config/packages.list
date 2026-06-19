@@ -95,7 +95,6 @@ libspa-0.2-jack
 
 # ── Networking ───────────────────────────────────────────────────────────────
 network-manager
-network-manager-gnome
 libnm0
 wpasupplicant
 wireless-tools
