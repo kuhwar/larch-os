@@ -104,47 +104,43 @@ Nine stages executed in order; `--stage N` skips stages before N, `--only N` run
 4. **chroot-configure** — bind-mounts proc/sys/dev, then runs `scripts/setup-chroot.sh` inside chroot; copies `config/packages.list` and `config/remove.list` into the chroot before invoking it
 5. **clean-rootfs** — runs `scripts/clean-rootfs.sh` inside chroot to physically remove apt/dpkg and dev headers
 6. **make-squashfs** — `mksquashfs work/rootfs work/rootfs.squashfs -comp zstd -Xcompression-level 19`
-7. **build-initramfs** — builds **two** fat initramfs images (see below); decompresses `.ko.xz`/`.ko.zst` modules (busybox modprobe cannot load compressed modules), patches `modules.dep`
-8. **assemble-iso** — builds `work/iso/` directory tree
+7. **build-initramfs** — builds the OS initramfs first, then **bakes it (plus the kernel, EFI binary, and loader config) into the installer initramfs** at `/payload` (see below); decompresses `.ko.xz`/`.ko.zst` modules (busybox modprobe cannot load compressed modules), patches `modules.dep`
+8. **assemble-iso** — builds `work/iso/` directory tree (just the kernel + installer initramfs + grub.cfg — a pure boot carrier)
 9. **make-iso** — `grub-mkrescue -d /usr/lib/grub/x86_64-efi -o larch-os.iso work/iso/ -- -volid LARCHOS` (`-d` pins a single GRUB platform so the ISO is **UEFI-only** — no BIOS El Torito image even if `grub-pc-bin` is installed)
 
 ### Two initramfs images
 
-Stage 7 produces two self-contained ("fat") initramfs files via the shared `build_initramfs()` function:
+Stage 7 produces two self-contained ("fat") initramfs files via the shared `build_initramfs()` function. The OS initramfs is built **first** because it is then baked, whole, into the installer initramfs:
 
 | Output file | Source dir | Extras baked in | Purpose |
 |---|---|---|---|
-| `work/installer.img` | `initramfs/installer/` | `install.sh` + `mke2fs` + shared libs | Runs on ISO boot; drives the installer |
-| `work/initramfs.img` | `initramfs/os/` | `rootfs.squashfs` (raw, uncompressed cpio append) | Copied to the installed disk; boots the OS |
+| `work/initramfs.img` | `initramfs/os/` | `rootfs.squashfs` (raw, uncompressed cpio append) | Baked into the installer initramfs; install.sh writes it to the installed disk; boots the OS |
+| `work/installer.img` | `initramfs/installer/` | `install.sh` + `mke2fs`/`openssl`/`sfdisk`/`mkdosfs` + shared libs + the **entire OS payload at `/payload`** (kernel, OS `initramfs.img`, `bootx64.efi`, loader config) | Runs on ISO boot; drives the installer entirely from RAM |
 
-**Two-pass cpio packing** for the OS initramfs: small files are gzip-9 compressed in one cpio pass; `rootfs.squashfs` (already zstd-compressed) is appended as a second raw uncompressed cpio block. The Linux kernel merges concatenated cpio archives transparently, so the squashfs is never double-compressed.
+**Why bake the payload in?** The installer never has to find or mount the boot medium. GRUB loads the installer initramfs into RAM, so `/payload` is present regardless of how the disc was booted — optical, raw-`dd`'d USB, or **Ventoy** (which loopback-boots the ISO and never exposes it as a Linux block device). The old "scan for the ISO9660 volume / loop-mount the .iso" logic is gone.
+
+**Two-pass cpio packing** applies to the OS initramfs only: small files are gzip-9 compressed in one cpio pass; `rootfs.squashfs` (already zstd-compressed) is appended as a second raw uncompressed cpio block, so the squashfs is never double-compressed. The installer initramfs is a single gzip pass (its embedded OS `initramfs.img` rides along inside `/payload`).
 
 ### ISO layout (`work/iso/`)
 
 ```
-/vmlinuz                          ← kernel (ISO boot)
-/initramfs.img                    ← installer initramfs (fat, contains install.sh)
+/vmlinuz                          ← kernel        (GRUB: linux /vmlinuz)
+/initramfs.img                    ← installer initramfs (fat; embeds /payload = full OS payload)
 /boot/grub/grub.cfg               ← GRUB2 menu (path is fixed by grub-mkrescue)
-/larch-os/initramfs.img           ← OS initramfs (fat, contains rootfs.squashfs)
-/larch-os/vmlinuz                 ← kernel (copied to installed disk)
-/larch-os/bootx64.efi             ← systemd-boot EFI binary
-/larch-os/loader/loader.conf
-/larch-os/loader/entries/larch.conf
 ```
 
-Everything at the ISO root is the installer runtime. Everything under `/larch-os/` is copied to the target disk by `install.sh`.
+The ISO is a pure boot carrier — GRUB boots these two files. Everything the installer copies to the target disk lives inside `/initramfs.img` at `/payload/`, not on the ISO.
 
 ### Boot flow
 
-**ISO/live:** GRUB2 → `/vmlinuz` + `/initramfs.img` (installer initramfs) → `install.sh` runs
+**ISO/live:** GRUB2 → `/vmlinuz` + `/initramfs.img` (installer initramfs) → `install.sh` runs, reading the OS payload from `/payload`
 
 **Installed disk:** systemd-boot → `/larch-os/vmlinuz` + `/larch-os/initramfs.img` (OS initramfs) → systemd
 
 **Installer initramfs (`initramfs/installer/init`)** — busybox sh PID 1:
-1. Loads all storage, USB, and filesystem modules
-2. Scans optical drives for an ISO9660 volume containing the larch-os payload
-3. Mounts the ISO at `/mnt/iso`
-4. `exec /install.sh`
+1. Loads storage + USB + FAT/ext4 modules (to reach and format the **target disk**)
+2. Sanity-checks that `/payload/larch-os/initramfs.img` is present
+3. `exec /install.sh` — which reads `/payload` and writes it to the target disk
 
 **OS initramfs (`initramfs/os/init`)** — busybox sh PID 1:
 1. Loads modules (squashfs/loop/overlay first, then storage/FAT drivers)
@@ -222,11 +218,11 @@ Partition 2 — ext4, remainder, label LARCHHOME
 | `scripts/clean-rootfs.sh` | Purges apt/dpkg and dev artifacts from rootfs before squashfs |
 | `config/packages.list` | Packages installed by `setup-chroot.sh` (comments and blank lines stripped) |
 | `config/remove.list` | Packages purged by `clean-rootfs.sh` after configuration |
-| `initramfs/installer/init` | Busybox sh PID 1 for the installer; finds ISO, mounts it, execs install.sh |
-| `initramfs/installer/modules.list` | Modules for the installer initramfs (includes full storage + USB stack) |
+| `initramfs/installer/init` | Busybox sh PID 1 for the installer; loads target-disk modules, then execs install.sh (no ISO to find — payload is baked in at `/payload`) |
+| `initramfs/installer/modules.list` | Modules for the installer initramfs (storage + USB + FAT/ext4 to reach and format the target disk) |
 | `initramfs/os/init` | Busybox sh PID 1 for the installed OS; mounts squashfs, overlayfs, applies config from LARCHOS |
 | `initramfs/os/modules.list` | Modules for the OS initramfs (squashfs/overlay + storage drivers for LARCHOS) |
-| `installer/install.sh` | Prompts for hostname/username/password, partitions disk, formats, copies OS initramfs and config files to LARCHOS, seeds home partition |
+| `installer/install.sh` | Prompts for hostname/username/password, partitions disk, formats, copies OS payload from `/payload` and config files to LARCHOS, seeds home partition |
 | `rootfs-overlay/` | Files copied verbatim into rootfs at stage 3; mirror the target path |
 
 ## Common customisation patterns
