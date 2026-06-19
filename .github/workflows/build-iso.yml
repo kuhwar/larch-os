@@ -24,16 +24,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Free up disk space
-        # The rootfs + squashfs + two initramfs + the ~600 MB ISO + builder
-        # image can exceed the default free space on ubuntu-latest.
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true       # reclaim ~20 GB
-          large-packages: false  # keep this step fast
-
       - name: Build ISO (privileged Docker)
-        run: ./docker-build.sh   # docker build + docker run --privileged
+        # No disk-cleanup step for now. Instead, log free space on / every 30s
+        # for the whole build so that if a heavy stage (debootstrap, mksquashfs,
+        # initramfs packing, or the ISO build) runs the runner out of space, the
+        # drop is visible in the log right before the failure. work/ and the
+        # Docker data both live on /, so that's the filesystem that fills up.
+        run: |
+          ( while true; do
+              printf '[disk %s] ' "$(date -u +%H:%M:%S)"
+              df -h / | awk 'NR==2 {print $4" avail ("$5" used of "$2")"}'
+              sleep 30
+            done ) &
+          df_logger=$!
+          trap 'kill "$df_logger" 2>/dev/null || true' EXIT
+          echo "[disk] baseline before build:"; df -h /
+          ./docker-build.sh        # docker build + docker run --privileged
 
       - name: Prepare artifacts
         # output/larch-os.iso is written by the privileged container as root.
