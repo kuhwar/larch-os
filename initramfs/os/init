@@ -14,7 +14,10 @@
 #   settle devices → mount LARCHOS → apply config → switch_root
 set -e
 
-log()  { echo "[larch-init] $*" > /dev/console; }
+# LOG_SINK starts at the console so anything failing before quiet-detection is
+# still visible; on a quiet boot it is repointed at /dev/kmsg (see below).
+LOG_SINK=/dev/console
+log()  { echo "[larch-init] $*" > "$LOG_SINK"; }
 die()  { echo "[larch-init] FATAL: $*" > /dev/console; emergency_shell; }
 
 emergency_shell() {
@@ -35,7 +38,15 @@ mkdir -p /dev/pts
 mount -t devpts devpts /dev/pts 2>/dev/null || true
 mount -t tmpfs  tmpfs  /dev/shm 2>/dev/null || true
 
-exec 1>/dev/console 2>/dev/console
+# On a quiet boot, send all initramfs chatter to the kernel ring buffer instead
+# of the console: it stays hidden behind `quiet`/loglevel (so the firmware logo
+# is not buried under [larch-init] text) but is still captured by dmesg. Pass
+# `larch.debug` on the kernel cmdline to keep the verbose console output.
+if grep -qw quiet /proc/cmdline && ! grep -qw larch.debug /proc/cmdline; then
+    LOG_SINK=/dev/kmsg
+fi
+
+exec 1>"$LOG_SINK" 2>"$LOG_SINK"
 log "larch-os initramfs starting"
 
 # ── Load modules ──────────────────────────────────────────────────────────────
