@@ -213,6 +213,23 @@ build_initramfs() {
     info "[$label] Done: $(basename "$out_file") ($sz)"
 }
 
+find_vmlinuz() {
+    # Echo the path to the rootfs kernel image (highest version if several).
+    local kver p
+    kver=$(ls "$ROOTFS_DIR/lib/modules/" 2>/dev/null | sort -V | tail -1)
+    for p in "$ROOTFS_DIR/boot/vmlinuz" "$ROOTFS_DIR/boot/vmlinuz-$kver"; do
+        [ -f "$p" ] && { echo "$p"; return 0; }
+    done
+    ls "$ROOTFS_DIR/boot/vmlinuz"* 2>/dev/null | sort -V | tail -1
+}
+
+find_efi_bin() {
+    # Echo the path to the systemd-boot EFI binary in the rootfs.
+    find "$ROOTFS_DIR/usr/lib/systemd/boot/efi" \
+        \( -name "systemd-bootx64.efi" -o -name "systemd-bootx64.efi.signed" \) \
+        2>/dev/null | head -1
+}
+
 # ── Root check ────────────────────────────────────────────────────────────────
 [ "$(id -u)" -eq 0 ] || die "Must run as root inside the privileged builder (needed for chroot, mknod, etc.) — use ./docker-build.sh"
 
@@ -339,7 +356,22 @@ run_stage 6 "make-squashfs — compress rootfs into squashfs image" && {
 }
 
 # ── Stage 7: build-initramfs ──────────────────────────────────────────────────
-run_stage 7 "build-initramfs — build installer and OS initramfs cpio archives" && {
+run_stage 7 "build-initramfs — build OS initramfs, then bake it into the installer initramfs" && {
+    # ── OS initramfs: fat — rootfs.squashfs is embedded directly ─────────────
+    # Built FIRST because the finished OS initramfs is baked, whole, into the
+    # installer initramfs below (the installer writes it to the target disk).
+    # Requires squashfs from stage 6.
+    [ -f "$SQUASHFS_FILE" ] || \
+        die "rootfs.squashfs not found ($SQUASHFS_FILE) — run stage 6 first"
+
+    OS_EXTRAS="$WORK_DIR/os-extras"
+    rm -rf "$OS_EXTRAS"
+    mkdir -p "$OS_EXTRAS"
+    info "[os] Copying rootfs.squashfs into initramfs extras"
+    cp "$SQUASHFS_FILE" "$OS_EXTRAS/rootfs.squashfs"
+
+    build_initramfs "$SCRIPT_DIR/initramfs/os" "$INITRAMFS_FILE" "os" "$OS_EXTRAS"
+
     # ── Installer extras: install.sh + mke2fs (with shared libs) ─────────────
     # The installer initramfs is "fat" — self-contained, no squashfs needed.
     # install.sh is baked in so the initramfs init can exec it directly.
@@ -427,69 +459,52 @@ run_stage 7 "build-initramfs — build installer and OS initramfs cpio archives"
     [ -n "$MKDOSFS_BIN" ] || die "mkdosfs not found in rootfs — add dosfstools to packages.list"
     install -D "$MKDOSFS_BIN" "$INSTALLER_EXTRAS${MKDOSFS_BIN#$ROOTFS_DIR}"
 
-    # Build the fat installer initramfs
+    # ── Bake the entire OS payload into the installer initramfs at /payload ──
+    # install.sh reads these straight from RAM and writes them to the target
+    # disk — so the installer never needs to find or mount the boot medium
+    # (works identically from optical, dd'd USB, or Ventoy).
+    info "[installer] Baking OS payload into initramfs at /payload"
+    PAYLOAD_DIR="$INSTALLER_EXTRAS/payload"
+    mkdir -p "$PAYLOAD_DIR/larch-os/loader/entries"
+
+    VMLINUZ="$(find_vmlinuz)"
+    [ -f "$VMLINUZ" ] || die "Kernel vmlinuz not found in rootfs/boot"
+    cp "$VMLINUZ"        "$PAYLOAD_DIR/vmlinuz"
+    cp "$INITRAMFS_FILE" "$PAYLOAD_DIR/larch-os/initramfs.img"
+
+    EFI_BIN="$(find_efi_bin)"
+    [ -f "$EFI_BIN" ] || die "systemd-boot EFI binary not found in rootfs"
+    cp "$EFI_BIN" "$PAYLOAD_DIR/larch-os/bootx64.efi"
+
+    cp "$SCRIPT_DIR/bootloader/loader.conf"        "$PAYLOAD_DIR/larch-os/loader/"
+    cp "$SCRIPT_DIR/bootloader/entries/larch.conf" "$PAYLOAD_DIR/larch-os/loader/entries/"
+
+    # Build the fat installer initramfs (install.sh + tools + the OS payload)
     build_initramfs "$SCRIPT_DIR/initramfs/installer" "$INSTALLER_INITRAMFS_FILE" \
                     "installer" "$INSTALLER_EXTRAS"
-
-    # ── OS initramfs: fat — rootfs.squashfs is embedded directly ─────────────
-    # Requires squashfs from stage 6. Check it exists before proceeding.
-    [ -f "$SQUASHFS_FILE" ] || \
-        die "rootfs.squashfs not found ($SQUASHFS_FILE) — run stage 6 first"
-
-    OS_EXTRAS="$WORK_DIR/os-extras"
-    rm -rf "$OS_EXTRAS"
-    mkdir -p "$OS_EXTRAS"
-    info "[os] Copying rootfs.squashfs into initramfs extras"
-    cp "$SQUASHFS_FILE" "$OS_EXTRAS/rootfs.squashfs"
-
-    build_initramfs "$SCRIPT_DIR/initramfs/os" "$INITRAMFS_FILE" "os" "$OS_EXTRAS"
 }
 
 # ── Stage 8: assemble-iso ────────────────────────────────────────────────────
 run_stage 8 "assemble-iso — copy all files into ISO tree" && {
     info "Assembling ISO directory tree"
     rm -rf "$ISO_ROOT"
-    # ISO layout:
-    #   /               — installer runtime (GRUB boots /vmlinuz + /initramfs.img)
+    # ISO layout — pure installer carrier. The OS payload is baked inside
+    # /initramfs.img (the installer initramfs), so the disc only needs the
+    # kernel + installer initramfs that GRUB boots, plus GRUB's own config:
+    #   /vmlinuz        — kernel        (GRUB: linux /vmlinuz)
+    #   /initramfs.img  — installer     (GRUB: initrd /initramfs.img; embeds payload)
     #   /boot/grub/     — GRUB internal config (path fixed by grub-mkrescue)
-    #   /larch-os/      — installed-OS payload (install.sh copies these to target)
-    mkdir -p \
-        "$ISO_ROOT/boot/grub" \
-        "$ISO_ROOT/larch-os/loader/entries"
+    mkdir -p "$ISO_ROOT/boot/grub"
 
     # GRUB config (path fixed — grub-mkrescue reads /boot/grub/grub.cfg)
     cp "$SCRIPT_DIR/bootloader/grub.cfg" "$ISO_ROOT/boot/grub/grub.cfg"
 
-    # Kernel — find vmlinuz in rootfs
-    VMLINUZ=""
-    for p in \
-        "$ROOTFS_DIR/boot/vmlinuz" \
-        "$ROOTFS_DIR/boot/vmlinuz-$(ls "$ROOTFS_DIR/lib/modules/" 2>/dev/null | sort -V | tail -1)"; do
-        [ -f "$p" ] && { VMLINUZ="$p"; break; }
-    done
-    [ -f "$VMLINUZ" ] || VMLINUZ=$(ls "$ROOTFS_DIR/boot/vmlinuz"* 2>/dev/null | sort -V | tail -1)
+    VMLINUZ="$(find_vmlinuz)"
     [ -f "$VMLINUZ" ] || die "Kernel vmlinuz not found in rootfs/boot"
     info "Kernel: $VMLINUZ"
 
-    # ── ISO root: installer runtime ───────────────────────────────────────────
-    cp "$VMLINUZ"                  "$ISO_ROOT/vmlinuz"       # GRUB: linux /vmlinuz
-    cp "$INSTALLER_INITRAMFS_FILE" "$ISO_ROOT/initramfs.img" # GRUB: initrd /initramfs.img
-    # rootfs.squashfs is embedded inside /larch-os/initramfs.img — no separate copy needed
-
-    # ── /larch-os/: installed-OS payload ─────────────────────────────────────
-    # install.sh copies these to the target EFI partition under /larch-os/
-    cp "$INITRAMFS_FILE" "$ISO_ROOT/larch-os/initramfs.img"
-
-    # systemd-boot EFI binary — install.sh places at EFI/BOOT/BOOTX64.EFI on target
-    EFI_BIN="$(find "$ROOTFS_DIR/usr/lib/systemd/boot/efi" \
-                    \( -name "systemd-bootx64.efi" -o -name "systemd-bootx64.efi.signed" \) \
-                    2>/dev/null | head -1)"
-    [ -f "$EFI_BIN" ] || die "systemd-boot EFI binary not found in rootfs"
-    cp "$EFI_BIN" "$ISO_ROOT/larch-os/bootx64.efi"
-
-    # systemd-boot loader config — install.sh copies to /loader/ on target
-    cp "$SCRIPT_DIR/bootloader/loader.conf"        "$ISO_ROOT/larch-os/loader/"
-    cp "$SCRIPT_DIR/bootloader/entries/larch.conf" "$ISO_ROOT/larch-os/loader/entries/"
+    cp "$VMLINUZ"                  "$ISO_ROOT/vmlinuz"
+    cp "$INSTALLER_INITRAMFS_FILE" "$ISO_ROOT/initramfs.img"
 
     info "ISO tree assembled at $ISO_ROOT"
     du -sh "$ISO_ROOT"

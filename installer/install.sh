@@ -1,8 +1,9 @@
 #!/bin/sh
 # installer/install.sh — larch-os disk installer
 #
-# Runs inside the installer initramfs (exec'd by /init after mounting the ISO).
-# The live ISO is mounted at /mnt/iso.
+# Runs inside the installer initramfs (exec'd by /init). The entire OS payload
+# (kernel, OS initramfs, EFI binary, loader config) is baked into the initramfs
+# at /payload, so there is no ISO to mount — the source files are already in RAM.
 #
 # Asks for:  hostname · username · password · target disk
 # Creates:   /larch-os/{hostname,hosts,passwd,shadow,username} on LARCHOS
@@ -21,7 +22,8 @@ set -e
 # /usr/sbin and /sbin.  Set explicitly so all tools are reachable.
 export PATH=/usr/sbin:/sbin:/usr/bin:/bin
 
-ISO_MNT="/mnt/iso"
+# OS payload baked into this initramfs (see docker-entrypoint.sh stage 7).
+SRC="/payload"
 OS_PART_SIZE="3GiB"
 TARGET_DISK=""
 AUTO_YES=0
@@ -79,12 +81,12 @@ done
 
 [ "$(id -u)" -eq 0 ] || die "Must be run as root"
 
-# ── Verify source files on ISO ────────────────────────────────────────────────
+# ── Verify baked-in payload ───────────────────────────────────────────────────
 
-[ -f "$ISO_MNT/vmlinuz" ]                || die "vmlinuz not found on ISO"
-[ -f "$ISO_MNT/larch-os/initramfs.img" ] || die "OS initramfs not found on ISO"
-[ -f "$ISO_MNT/larch-os/bootx64.efi" ]  || die "EFI binary not found on ISO"
-[ -d "$ISO_MNT/larch-os/loader" ]        || die "Bootloader config not found on ISO"
+[ -f "$SRC/vmlinuz" ]                || die "vmlinuz not found in payload"
+[ -f "$SRC/larch-os/initramfs.img" ] || die "OS initramfs not found in payload"
+[ -f "$SRC/larch-os/bootx64.efi" ]   || die "EFI binary not found in payload"
+[ -d "$SRC/larch-os/loader" ]        || die "Bootloader config not found in payload"
 
 # ── Prompt for system configuration ──────────────────────────────────────────
 
@@ -242,17 +244,17 @@ mount_or_die vfat "$PART1" "$MOUNT_OS"
 
 info "Installing EFI binary"
 mkdir -p "$MOUNT_OS/EFI/BOOT"
-cp "$ISO_MNT/larch-os/bootx64.efi" "$MOUNT_OS/EFI/BOOT/BOOTX64.EFI"
+cp "$SRC/larch-os/bootx64.efi" "$MOUNT_OS/EFI/BOOT/BOOTX64.EFI"
 
 info "Copying bootloader config"
-cp -r "$ISO_MNT/larch-os/loader" "$MOUNT_OS/"
+cp -r "$SRC/larch-os/loader" "$MOUNT_OS/"
 
 info "Copying kernel"
 mkdir -p "$MOUNT_OS/larch-os"
-cp "$ISO_MNT/vmlinuz" "$MOUNT_OS/larch-os/vmlinuz"
+cp "$SRC/vmlinuz" "$MOUNT_OS/larch-os/vmlinuz"
 
 info "Copying OS initramfs (this may take a few minutes — fat image)"
-cp "$ISO_MNT/larch-os/initramfs.img" "$MOUNT_OS/larch-os/initramfs.img"
+cp "$SRC/larch-os/initramfs.img" "$MOUNT_OS/larch-os/initramfs.img"
 
 info "Writing installation config to LARCHOS"
 cp "$CONFIG_TMP/hostname" "$MOUNT_OS/larch-os/hostname"
