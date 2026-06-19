@@ -1,192 +1,174 @@
 # larch-os
 
-A minimal, immutable Linux distribution with a GNOME Wayland desktop and Flatpak-only application delivery.
+A minimal, **immutable** Linux desktop. The whole operating system ships as a single
+read-only image: you can't break it, and every reboot returns the system files to a
+known-good state. You get a clean GNOME (Wayland) desktop, and you install apps as
+[Flatpaks](https://flatpak.org/) from [Flathub](https://flathub.org/). Your files and
+settings live in `/home` and are kept separate from the OS.
 
-## Design Principles
+It is based on Debian Trixie and is intentionally simple: one user, automatic (DHCP)
+networking, no package manager to fiddle with, no options to get lost in.
 
-| Property | Implementation |
-|---|---|
-| Immutable OS root | SquashFS (read-only) + OverlayFS (tmpfs upper layer) |
-| App delivery | Flatpak only — no package manager in the running system |
-| Desktop | GNOME Shell (Wayland), Nautilus, GNOME Terminal |
-| Boot | UEFI only — systemd-boot, no GRUB, no legacy BIOS |
-| Output | Single `larch-os.iso` file |
-| User data | Persists in a dedicated `/home` partition |
+---
 
-## Disk Layout (installed)
+> ## ⚠️ Read this before installing
+>
+> - **The installer ERASES the entire target disk.** Every existing partition, OS,
+>   and file on the disk you pick is destroyed. There is no dual-boot and no "install
+>   alongside." Back up anything you care about first, and double-check which disk you
+>   select.
+>
+> - **There is no upgrade path yet.** Once installed, larch-os cannot currently be
+>   updated in place. Moving to a newer version means a **fresh install, which wipes
+>   the disk again — including your `/home`.** Back up your data before reinstalling.
+>   In-place atomic upgrades (that keep `/home`) are planned — see the
+>   [Roadmap](#roadmap).
+>
+> - **UEFI only.** The machine must boot in UEFI mode. Legacy BIOS is not supported.
 
-```
-┌─────────────────────────────────────────────────────┐
-│  GPT disk                                           │
-├────────────────────────────┬────────────────────────┤
-│  Partition 1               │  Partition 2           │
-│  FAT32 · ~3 GiB            │  ext4 · rest of disk   │
-│  label: LARCHOS            │  label: LARCHHOME      │
-│                            │                        │
-│  EFI/BOOT/BOOTX64.EFI      │  /home                 │
-│  loader/                   │  (persistent)          │
-│  boot/vmlinuz              │                        │
-│  boot/initramfs.img        │                        │
-│  live/rootfs.squashfs      │                        │
-└────────────────────────────┴────────────────────────┘
-```
+---
 
-The OS lives entirely in a compressed SquashFS image on the EFI partition. The root filesystem is physically read-only. An OverlayFS with a tmpfs upper layer makes `/etc`, `/var`, and `/tmp` writable at runtime — changes are discarded on reboot. Only `/home` is persistent.
+## What you get
 
-## Boot Flow
-
-```
-UEFI firmware
-  └─> EFI/BOOT/BOOTX64.EFI  (systemd-boot)
-        └─> kernel + initramfs.img
-              └─> initramfs/init:
-                    1. Load kernel modules (squashfs, overlay, loop, vfat, ext4)
-                    2. Find LARCHOS partition → mount FAT32
-                    3. Loop-mount live/rootfs.squashfs (read-only)
-                    4. Set up OverlayFS (tmpfs upper)
-                    5. Find LARCHHOME partition → mount as /home
-                    6. switch_root → systemd → GDM → GNOME Wayland
-```
-
-## Quick Start
-
-### 1. Install build dependencies
-
-```bash
-make install-deps
-# or manually:
-sudo apt-get install debootstrap squashfs-tools xorriso mtools dosfstools \
-                     gdisk systemd-boot ovmf qemu-system-x86 cpio
-```
-
-### 2. Build the ISO
-
-```bash
-make iso          # wrapper around ./docker-build.sh
-# Output: output/larch-os.iso
-```
-
-The OS is built **only inside the privileged Docker builder** — there is no host-side
-build script. The pipeline needs `chroot`/`mount --bind`/`mknod`, which are unavailable
-to an unprivileged `docker build`, so it runs at `docker run --privileged` time.
-
-The full build takes 20–40 minutes depending on network speed and CPU (the debootstrap and package installation stages are the slow parts).
-
-### 3. Test in QEMU
-
-```bash
-make test-qemu
-```
-
-### 4. Install to disk (from live environment)
-
-Boot the ISO, then open GNOME Terminal and run:
-
-```bash
-sudo larch-install
-```
-
-The installer will ask for the target disk, then create the two-partition layout and copy everything.
-
-## Build Stages
-
-The build runs in 9 stages (`docker-entrypoint.sh`). You can restart from any stage:
-
-| Stage | Name | Description |
-|---|---|---|
-| 1 | check-deps | Verify host build tools |
-| 2 | debootstrap | Create minimal Debian Bookworm rootfs |
-| 3 | copy-overlay | Merge `rootfs-overlay/` into rootfs |
-| 4 | chroot-configure | Install packages, configure system |
-| 5 | clean-rootfs | Strip apt/dpkg from final image |
-| 6 | make-squashfs | Compress rootfs → `rootfs.squashfs` |
-| 7 | build-initramfs | Assemble custom cpio initramfs |
-| 8 | assemble-iso | Copy all files into ISO tree |
-| 9 | make-iso | Run grub-mkrescue → `larch-os.iso` (UEFI only) |
-
-```bash
-# Resume from stage 6 (e.g. after editing rootfs-overlay):
-./docker-build.sh --stage 6
-
-# Re-run only stage 7:
-./docker-build.sh --only 7
-```
-
-## Repository Structure
-
-```
-larch-os/
-├── docker-entrypoint.sh      Build pipeline (stages 1–9; runs in the builder container)
-├── docker-build.sh           Host wrapper: builds + runs the privileged builder
-├── Dockerfile                Builder image (all build tools)
-├── Makefile                  Convenience targets (wrap ./docker-build.sh)
-├── config/
-│   ├── packages.list         Packages installed during build
-│   └── remove.list           Packages stripped before squashfs
-├── rootfs-overlay/           Files merged into rootfs
-│   └── etc/
-│       ├── os-release        Distro branding
-│       ├── hostname
-│       ├── fstab
-│       ├── gdm3/custom.conf  GDM Wayland config
-│       └── flatpak/          Flathub remote config
-├── initramfs/
-│   ├── init                  Custom PID-1 init script
-│   └── modules.list          Kernel modules bundled into initramfs
-├── bootloader/
-│   ├── loader.conf           systemd-boot global config
-│   └── entries/larch.conf    Boot entry (kernel cmdline)
-├── scripts/
-│   ├── setup-chroot.sh       Runs inside chroot: packages, users, services
-│   └── clean-rootfs.sh       Strips package manager from final image
-└── installer/
-    └── install.sh            Disk installer (run from live environment)
-```
-
-## Customisation
-
-### Adding packages to the base image
-
-Edit `config/packages.list` and re-run from stage 4:
-```bash
-./docker-build.sh --stage 4
-```
-
-### Changing the default user
-
-Edit `scripts/setup-chroot.sh` — search for `useradd larch`. Re-run from stage 4.
-
-### Adding system configuration files
-
-Drop files into `rootfs-overlay/` mirroring their destination path, e.g.:
-```
-rootfs-overlay/etc/environment   → /etc/environment in the image
-rootfs-overlay/usr/share/wallpapers/my-bg.png → ...
-```
-Then re-run from stage 3.
-
-### Enabling autologin
-
-Edit `rootfs-overlay/etc/gdm3/custom.conf`:
-```ini
-[daemon]
-AutomaticLoginEnable=true
-AutomaticLogin=larch
-```
-
-## Security Notes
-
-- Root account is locked (`passwd -l root`)
-- No SSH server installed by default
-- Package manager is physically absent from the running system
-- OS root resets to factory state on every reboot
+- A read-only OS image (SquashFS) — system files can't be modified and reset on reboot.
+- GNOME Shell on Wayland, with Files (Nautilus) and Terminal.
+- Flathub preconfigured; install any app with the `flatpak` command.
+- A persistent home directory on its own partition.
+- A locked-down, zero-decision setup: one user account, DHCP networking, no root login,
+  no SSH, no package manager.
 
 ## Requirements
 
 | | Minimum | Recommended |
 |---|---|---|
-| RAM | 2 GB | 4 GB |
-| Disk (installed) | 8 GB | 20 GB+ |
-| CPU | x86-64 with SSE4.2 | x86-64 with KVM |
-| Firmware | UEFI | UEFI |
-| GPU | Any with VESA/VBIOS | Mesa-supported (Intel/AMD/virtio) |
+| Firmware | **UEFI** (Secure Boot off — see below) | UEFI |
+| CPU | 64-bit x86 (x86-64) | x86-64 with KVM |
+| RAM | 2 GB | 4 GB+ |
+| Disk | 8 GB | 20 GB+ |
+| GPU | Anything with a basic framebuffer | Intel / AMD / virtio (Mesa) |
+
+**Secure Boot:** the boot images are not signed, so if your machine has Secure Boot
+enabled you'll need to **disable it in firmware settings** before installing and booting.
+
+## 1. Download
+
+Grab the latest ISO from the [**Releases**](https://github.com/kuhwar/larch-os/releases) page:
+
+- Always-latest ISO: <https://github.com/kuhwar/larch-os/releases/latest/download/larch-os.iso>
+- Checksum: `larch-os.iso.sha256` (attached to each release)
+
+Verify the download before writing it:
+
+```bash
+sha256sum -c larch-os.iso.sha256
+# larch-os.iso: OK
+```
+
+## 2. Write it to a USB stick
+
+This **erases the USB stick.** Replace `/dev/sdX` with your stick's device
+(check carefully with `lsblk` — picking the wrong device destroys data):
+
+```bash
+sudo dd if=larch-os.iso of=/dev/sdX bs=4M status=progress oflag=sync
+```
+
+Prefer a graphical tool? **GNOME Disks** ("Restore Disk Image…") or
+[**balenaEtcher**](https://etcher.balena.io/) work just as well. A USB stick of 1 GB or
+larger is plenty.
+
+## 3. Install
+
+1. Plug in the USB stick and boot the machine from it (open the firmware boot menu —
+   often <kbd>F12</kbd>, <kbd>F11</kbd>, <kbd>F9</kbd>, or <kbd>Esc</kbd> — and choose
+   the USB entry, in **UEFI** mode).
+2. A short boot menu appears for 3 seconds, then larch-os boots **straight into the
+   installer** — there is no live desktop to explore.
+3. The installer asks for exactly four things:
+
+   | Prompt | What it's for |
+   |---|---|
+   | **Hostname** | The computer's name on the network |
+   | **Username** | Your single user account |
+   | **Password** | Password for that account |
+   | **Target disk** | The disk to install onto — **this disk is wiped** |
+
+4. Review the summary and confirm. The installer then **erases the target disk**,
+   creates its layout, and copies the system over.
+5. When it finishes, remove the USB stick and reboot. You'll land at the GNOME login
+   screen.
+
+> The disk is split into two partitions: a small boot/system partition that holds the OS
+> image and your machine's settings, and a larger partition for your `/home`. Keeping
+> them separate is what will make future upgrades possible without touching your files.
+
+## 4. First boot & installing apps
+
+Log in with the username and password you chose. To install software, use Flatpak from
+a terminal. **[Flathub](https://flathub.org/) is preconfigured as the download source**
+(the `flathub` remote in the commands below). Because only your `/home` survives, install
+apps into your user with `--user`:
+
+```bash
+# Install Chromium from Flathub
+flatpak install --user flathub org.chromium.Chromium
+
+# More examples
+flatpak install --user flathub org.mozilla.firefox
+flatpak install --user flathub org.gnome.Calculator
+```
+
+Run them from the GNOME app grid like any other application. Browse what's available at
+<https://flathub.org/>, or search from the terminal:
+
+```bash
+flatpak search chromium
+```
+
+## How it works (and what persists)
+
+- **The OS is read-only.** System files come from a compressed image and cannot be
+  changed. Anything written outside `/home` lives in memory and is **discarded on every
+  reboot** — so the base system always returns to a clean state.
+- **`/home` is persistent.** Your files, settings, and Flatpak apps live on a separate
+  partition and survive reboots.
+- **There is no package manager** in the running system, and no root login. You shape
+  your environment entirely through Flatpak apps and your home directory.
+
+This is by design: it makes the system predictable and very hard to break.
+
+## Updating
+
+**Not available yet.** larch-os currently has no in-place update mechanism. To run a
+newer release you must do a fresh install, which **erases the whole disk, including your
+`/home`** — so **back up your data first**.
+
+Atomic, in-place upgrades that swap the OS image while preserving your `/home` are the
+top item on the [Roadmap](#roadmap).
+
+## Limitations (by design)
+
+- **One user.** The account created during install is the only one; there's no way to add
+  or remove users afterward.
+- **Networking is automatic (DHCP) only.** There's no network configuration UI.
+- **Apps via Flatpak only.** No `apt`, no system package manager.
+- **No in-place upgrades yet** (see above).
+
+## Roadmap
+
+- **Atomic, in-place upgrades** — replace the OS image and keep `/home`, with easy
+  rollback. *(Top priority.)*
+- Signed boot images for Secure Boot support.
+- A graphical app store experience on top of Flathub.
+
+## Build it yourself
+
+larch-os is built reproducibly inside a privileged Docker container — no host build
+tools required beyond Docker:
+
+```bash
+./docker-build.sh            # → output/larch-os.iso
+```
+
+Releases are produced automatically by GitHub Actions on each version tag. For the build
+internals and contributor notes, see [`CLAUDE.md`](CLAUDE.md).
