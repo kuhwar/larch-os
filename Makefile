@@ -125,6 +125,36 @@ test-qemu-install: ## Test installation: boot ISO + attach a blank 20G disk
 	    -device virtio-net,netdev=net0 \
 	    -netdev user,id=net0
 
+## ── Fast OS iteration (no installer) ─────────────────────────────────────────
+
+.PHONY: dev-disk
+dev-disk: ## Build a pre-installed dev disk on the host (no QEMU install) from work/iso/
+	$(SUDO) ./scripts/make-dev-disk.sh
+
+.PHONY: dev-reflash
+dev-reflash: ## Swap freshly-built OS initramfs onto the dev disk; keeps /home (partition 2)
+	$(SUDO) ./scripts/make-dev-disk.sh --reflash
+
+.PHONY: dev-iter
+dev-iter: ## One-shot OS iteration: rebuild squashfs+initramfs (stage 6) then reflash
+	$(BUILD) --stage 6
+	$(SUDO) ./scripts/make-dev-disk.sh --reflash
+
+.PHONY: test-qemu-dev
+test-qemu-dev: ## Boot the host-built dev disk (raw) — fast OS iteration loop
+	@[ -f work/dev-disk.img ] || { echo "No work/dev-disk.img — run 'make dev-disk' first"; exit 1; }
+	qemu-system-x86_64 \
+	    -enable-kvm \
+	    -m 4G \
+	    -cpu host \
+	    -smp 2 \
+	    -bios /usr/share/ovmf/OVMF.fd \
+	    -drive file=work/dev-disk.img,format=raw,if=virtio \
+	    -vga $(QEMU_VGA) \
+	    -display $(QEMU_DISPLAY) \
+	    -device virtio-net,netdev=net0 \
+	    -netdev user,id=net0
+
 .PHONY: test-qemu-disk
 test-qemu-disk: ## Boot the INSTALLED disk only (no ISO) — tests the real installed system
 	@[ -f work/test-disk.img ] || { echo "No work/test-disk.img — run 'make test-qemu-install' first to install"; exit 1; }
