@@ -1,6 +1,6 @@
 #!/bin/bash
 # scripts/setup-chroot.sh — runs INSIDE the chroot after debootstrap
-# Called by build.sh as: chroot work/rootfs /setup-chroot.sh
+# Called by docker-entrypoint.sh (stage 4) as: chroot work/rootfs /setup-chroot.sh
 # The script is bind-mounted into the chroot at /setup-chroot.sh before execution.
 
 set -euo pipefail

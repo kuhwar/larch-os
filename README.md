@@ -62,9 +62,13 @@ sudo apt-get install debootstrap squashfs-tools xorriso mtools dosfstools \
 ### 2. Build the ISO
 
 ```bash
-sudo make iso
-# Output: larch-os.iso
+make iso          # wrapper around ./docker-build.sh
+# Output: output/larch-os.iso
 ```
+
+The OS is built **only inside the privileged Docker builder** — there is no host-side
+build script. The pipeline needs `chroot`/`mount --bind`/`mknod`, which are unavailable
+to an unprivileged `docker build`, so it runs at `docker run --privileged` time.
 
 The full build takes 20–40 minutes depending on network speed and CPU (the debootstrap and package installation stages are the slow parts).
 
@@ -86,7 +90,7 @@ The installer will ask for the target disk, then create the two-partition layout
 
 ## Build Stages
 
-`build.sh` runs in 9 stages. You can restart from any stage:
+The build runs in 9 stages (`docker-entrypoint.sh`). You can restart from any stage:
 
 | Stage | Name | Description |
 |---|---|---|
@@ -98,22 +102,24 @@ The installer will ask for the target disk, then create the two-partition layout
 | 6 | make-squashfs | Compress rootfs → `rootfs.squashfs` |
 | 7 | build-initramfs | Assemble custom cpio initramfs |
 | 8 | assemble-iso | Copy all files into ISO tree |
-| 9 | make-iso | Run xorriso → `larch-os.iso` |
+| 9 | make-iso | Run grub-mkrescue → `larch-os.iso` (UEFI only) |
 
 ```bash
 # Resume from stage 6 (e.g. after editing rootfs-overlay):
-sudo ./build.sh --stage 6
+./docker-build.sh --stage 6
 
 # Re-run only stage 7:
-sudo ./build.sh --only 7
+./docker-build.sh --only 7
 ```
 
 ## Repository Structure
 
 ```
 larch-os/
-├── build.sh                  Main build script (stages 1–9)
-├── Makefile                  Convenience targets
+├── docker-entrypoint.sh      Build pipeline (stages 1–9; runs in the builder container)
+├── docker-build.sh           Host wrapper: builds + runs the privileged builder
+├── Dockerfile                Builder image (all build tools)
+├── Makefile                  Convenience targets (wrap ./docker-build.sh)
 ├── config/
 │   ├── packages.list         Packages installed during build
 │   └── remove.list           Packages stripped before squashfs
@@ -143,7 +149,7 @@ larch-os/
 
 Edit `config/packages.list` and re-run from stage 4:
 ```bash
-sudo ./build.sh --stage 4
+./docker-build.sh --stage 4
 ```
 
 ### Changing the default user

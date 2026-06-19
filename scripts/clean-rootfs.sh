@@ -1,7 +1,7 @@
 #!/bin/bash
 # scripts/clean-rootfs.sh — runs INSIDE the chroot as the final step before squashfs
 # Strips the package manager and anything else that must not be in the final image.
-# Called by build.sh as: chroot work/rootfs /clean-rootfs.sh
+# Called by docker-entrypoint.sh (stage 5) as: chroot work/rootfs /clean-rootfs.sh
 
 set -euo pipefail
 

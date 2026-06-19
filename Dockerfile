@@ -28,14 +28,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gdisk \
     # systemd-boot EFI binary (for installed-to-disk systems)
     systemd-boot \
-    # GRUB2 — used for ISO/live boot (has ISO9660 driver; systemd-boot does not)
+    # GRUB2 (UEFI only) — used for ISO/live boot (has ISO9660 driver; systemd-boot does not)
     grub-common \
     grub-efi-amd64-bin \
-    grub-pc-bin \
     # initramfs packing
     cpio \
     gzip \
-    # misc utilities used by build.sh
+    # misc utilities used by the build pipeline (docker-entrypoint.sh)
     ca-certificates \
     curl \
     rsync \
@@ -61,8 +60,8 @@ RUN mkdir -p /output
 # Override OUTPUT_ISO so the ISO lands in the mounted output volume
 ENV LARCH_OUTPUT_ISO=/output/larch-os.iso
 
-# Entrypoint: run the full build by default.
-# Override CMD to run a specific stage:
-#   docker run ... larch-os-builder ./build.sh --stage 6
+# Entrypoint: the build pipeline itself (all 9 stages live in docker-entrypoint.sh).
+# With no arguments it runs a full build; forward stage flags as CMD args, e.g.
+#   docker run --privileged ... larch-os-builder --stage 6
+# (the ./docker-build.sh wrapper does this for you).
 ENTRYPOINT ["./docker-entrypoint.sh"]
-CMD ["./build.sh"]

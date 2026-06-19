@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The end product is an **atomic, image-based distro** where the entire OS is one immutable unit and upgrades happen by swapping that unit — never by mutating files in place.
 
-**Boot-to-install flow.** `build.sh` / `docker-build.sh` produce `larch-os.iso`. Booting the ISO drops the user straight into the installer script (no live desktop). The installer collects exactly four things:
+**Boot-to-install flow.** `./docker-build.sh` produces `larch-os.iso`. Booting the ISO drops the user straight into the installer script (no live desktop). The installer collects exactly four things:
 
 1. hostname
 2. username
@@ -35,46 +35,55 @@ When implementing features, default to the most minimal, opinionated, immutable 
 
 ## Build commands
 
-All build targets require root. The Makefile is a thin wrapper around `build.sh`.
+**The OS is built only inside the privileged Docker builder.** There is no host-side
+build script — the 9-stage pipeline lives in `docker-entrypoint.sh` (the container
+ENTRYPOINT) and needs `chroot`, `mount --bind`, and `mknod`, none of which are
+available to an unprivileged `docker build`. So the pipeline runs at `docker run
+--privileged` time via `./docker-build.sh`, never as Dockerfile `RUN` steps. The
+Makefile build targets are thin wrappers around `./docker-build.sh`.
 
 ```bash
 # Full build (all 9 stages) — takes 20–40 min on first run
-sudo make iso
-
-# Resume from a specific stage (e.g. after editing rootfs-overlay/)
-sudo ./build.sh --stage 3
-
-# Re-run exactly one stage
-sudo ./build.sh --only 7
+make iso                       # → output/larch-os.iso   (alias for ./docker-build.sh)
 
 # Delete work/ and output ISO
-sudo make clean
+make clean                     # → ./docker-build.sh --clean
 
-# Install host-side build tools
+# Install host-side tools for QEMU testing / dev-disk (NOT for building)
 sudo make install-deps
 ```
+
+### Docker build / resume
+
+```bash
+./docker-build.sh              # full build → output/larch-os.iso
+./docker-build.sh --dev        # bind-mount source for fast iteration
+./docker-build.sh --stage 6    # resume from stage 6 (work/ is bind-mounted, so resume works)
+./docker-build.sh --only 7     # run exactly one stage
+./docker-build.sh --shell      # interactive shell inside builder container
+./docker-build.sh --clean      # delete output/ and work/ (uses Docker for root-owned files)
+```
+
+`docker-build.sh` runs the builder container with `--privileged` (needed for `chroot`,
+`mount --bind`, and `mknod`) and forwards any `--stage`/`--only` flags straight to the
+entrypoint.
 
 ### Incremental rebuild shortcuts
 
 | Changed | Command |
 |---|---|
-| `rootfs-overlay/` files | `sudo ./build.sh --stage 3` |
-| `config/packages.list` or `scripts/setup-chroot.sh` | `sudo ./build.sh --stage 4` |
-| `scripts/clean-rootfs.sh` or `config/remove.list` | `sudo ./build.sh --stage 5` |
-| `initramfs/installer/` or `initramfs/os/` or `installer/install.sh` | `sudo ./build.sh --only 7` |
-| Bootloader configs only | `sudo ./build.sh --stage 8` |
+| `rootfs-overlay/` files | `./docker-build.sh --stage 3` |
+| `config/packages.list` or `scripts/setup-chroot.sh` | `./docker-build.sh --stage 4` |
+| `scripts/clean-rootfs.sh` or `config/remove.list` | `./docker-build.sh --stage 5` |
+| `initramfs/installer/` or `initramfs/os/` or `installer/install.sh` | `./docker-build.sh --only 7` (or `make initramfs`) |
+| Bootloader configs only | `./docker-build.sh --stage 8` (or `make iso-only`) |
 
-### Docker build (no host-side deps required)
+### Test in QEMU
 
 ```bash
-./docker-build.sh              # full build → output/larch-os.iso
-./docker-build.sh --dev        # bind-mount source for fast iteration
-./docker-build.sh --stage 6    # resume from stage 6
-./docker-build.sh --shell      # interactive shell inside builder container
-./docker-build.sh --clean      # delete output/ and work/ (uses Docker for root-owned files)
+make test-qemu               # boot ISO with UEFI (requires ovmf + qemu-system-x86)
+make test-qemu-install       # boot ISO + blank 20G qcow2 disk for install testing
 ```
-
-The container must run with `--privileged` (needed for `chroot`, `mount --bind`, and `mknod`).
 
 ### Test in QEMU
 
@@ -85,7 +94,7 @@ make test-qemu-install       # boot ISO + blank 20G qcow2 disk for install testi
 
 ## Architecture
 
-### Build pipeline (`build.sh`)
+### Build pipeline (`docker-entrypoint.sh`)
 
 Nine stages executed in order; `--stage N` skips stages before N, `--only N` runs just N:
 
@@ -97,7 +106,7 @@ Nine stages executed in order; `--stage N` skips stages before N, `--only N` run
 6. **make-squashfs** — `mksquashfs work/rootfs work/rootfs.squashfs -comp zstd -Xcompression-level 19`
 7. **build-initramfs** — builds **two** fat initramfs images (see below); decompresses `.ko.xz`/`.ko.zst` modules (busybox modprobe cannot load compressed modules), patches `modules.dep`
 8. **assemble-iso** — builds `work/iso/` directory tree
-9. **make-iso** — `grub-mkrescue -o larch-os.iso work/iso/ -- -volid LARCHOS`
+9. **make-iso** — `grub-mkrescue -d /usr/lib/grub/x86_64-efi -o larch-os.iso work/iso/ -- -volid LARCHOS` (`-d` pins a single GRUB platform so the ISO is **UEFI-only** — no BIOS El Torito image even if `grub-pc-bin` is installed)
 
 ### Two initramfs images
 
@@ -179,7 +188,7 @@ The OS init re-applies these on every boot into the tmpfs upper layer:
 | `bootloader/grub.cfg` | Live ISO boot menu (GRUB2, ISO9660); references `/vmlinuz` and `/initramfs.img` at ISO root |
 | `bootloader/loader.conf` + `bootloader/entries/larch.conf` | systemd-boot for installed disk (FAT32 EFI partition); references `/larch-os/vmlinuz` and `/larch-os/initramfs.img` |
 
-GRUB is only for booting the ISO. `grub-mkrescue` requires grub.cfg at `/boot/grub/grub.cfg` — this path cannot be changed.
+GRUB is only for booting the ISO, and only in **UEFI mode** — the whole system (live ISO and installed disk) is UEFI-only. The ISO carries no BIOS/legacy boot path; stage 9 pins `grub-mkrescue -d /usr/lib/grub/x86_64-efi` so only a UEFI El Torito image is emitted. `grub-mkrescue` requires grub.cfg at `/boot/grub/grub.cfg` — this path cannot be changed.
 
 ### Disk layout (installed)
 
@@ -206,7 +215,9 @@ Partition 2 — ext4, remainder, label LARCHHOME
 
 | File | Role |
 |---|---|
-| `build.sh` | Orchestrates all 9 stages; defines `build_initramfs()`, `chroot_run()` / `chroot_run_with_deps()` helpers |
+| `docker-entrypoint.sh` | The build: orchestrates all 9 stages inside the privileged builder container; defines `build_initramfs()`, `chroot_run()` / `chroot_run_with_deps()` helpers. Runs at `docker run` time (the container ENTRYPOINT), not during `docker build` |
+| `docker-build.sh` | Host wrapper: builds the `larch-os-builder` image, then runs it `--privileged` with `work/` and `output/` bind-mounted; forwards `--stage`/`--only`/`--clean`/`--dev`/`--shell` |
+| `Dockerfile` | Builder image (`debian:trixie-slim`) with all build tools; `ENTRYPOINT` is `docker-entrypoint.sh` |
 | `scripts/setup-chroot.sh` | Installs packages, creates default user `larch` (password `larch`), enables GDM/NetworkManager/PipeWire, adds Flathub remote, configures polkit for Flatpak |
 | `scripts/clean-rootfs.sh` | Purges apt/dpkg and dev artifacts from rootfs before squashfs |
 | `config/packages.list` | Packages installed by `setup-chroot.sh` (comments and blank lines stripped) |
@@ -217,7 +228,6 @@ Partition 2 — ext4, remainder, label LARCHHOME
 | `initramfs/os/modules.list` | Modules for the OS initramfs (squashfs/overlay + storage drivers for LARCHOS) |
 | `installer/install.sh` | Prompts for hostname/username/password, partitions disk, formats, copies OS initramfs and config files to LARCHOS, seeds home partition |
 | `rootfs-overlay/` | Files copied verbatim into rootfs at stage 3; mirror the target path |
-| `Dockerfile` | Builder image based on `debian:trixie-slim`; needs `--privileged` at runtime |
 
 ## Common customisation patterns
 
@@ -230,9 +240,9 @@ Partition 2 — ext4, remainder, label LARCHHOME
 
 ## Important constraints
 
-- **`set -euo pipefail`** is used throughout build.sh — any unhandled command failure aborts the build
+- **`set -euo pipefail`** is used throughout `docker-entrypoint.sh` — any unhandled command failure aborts the build
 - **Both init scripts use `set -e`** and run as PID 1; unhandled errors call `emergency_shell` (busybox sh on `/dev/console`); any command that may legitimately produce no output (e.g. `grep`, `ls`) must have `|| true`
 - **`.ko.xz` modules** (Trixie default): busybox `modprobe` cannot load XZ-compressed modules; stage 7 always decompresses them and patches `modules.dep` — do not skip this when adding modules
 - **`rootfs.squashfs` is not a separate file on the installed disk** — it is embedded inside `initramfs.img` as a raw uncompressed cpio append; never double-compress it
-- **`work/` contents are root-owned** after a native build; use `./docker-build.sh --clean` rather than `rm -rf work/` to avoid permission errors
+- **`work/` contents are root-owned** (created inside the privileged container); use `./docker-build.sh --clean` rather than `rm -rf work/` to avoid permission errors
 - **Output ISO path** is controlled by `$LARCH_OUTPUT_ISO` env var (defaults to `$SCRIPT_DIR/larch-os.iso`; Docker sets it to `/output/larch-os.iso`)

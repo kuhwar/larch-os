@@ -81,7 +81,8 @@ fi
 # ── Shell mode ────────────────────────────────────────────────────────────────
 if [ "$SHELL_MODE" -eq 1 ]; then
     echo "Dropping into builder shell (--privileged)"
-    docker run -it "${DOCKER_RUN_ARGS[@]}" "$IMAGE_NAME" bash
+    # The image entrypoint is the build pipeline, so override it to get a shell.
+    docker run -it --entrypoint bash "${DOCKER_RUN_ARGS[@]}" "$IMAGE_NAME"
     exit $?
 fi
 
@@ -92,7 +93,8 @@ echo "Output will appear at: $OUTPUT_DIR/larch-os.iso"
 echo ""
 
 if [ "${#BUILD_ARGS[@]}" -gt 0 ]; then
-    docker run "${DOCKER_RUN_ARGS[@]}" "$IMAGE_NAME" ./build.sh "${BUILD_ARGS[@]}"
+    # Stage flags (--stage/--only/--clean) are forwarded straight to the entrypoint.
+    docker run "${DOCKER_RUN_ARGS[@]}" "$IMAGE_NAME" "${BUILD_ARGS[@]}"
 else
     docker run "${DOCKER_RUN_ARGS[@]}" "$IMAGE_NAME"
 fi

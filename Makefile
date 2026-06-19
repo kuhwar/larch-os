@@ -1,16 +1,13 @@
 # larch-os Makefile
-# All targets that touch the rootfs or produce output require root.
-# Convenience wrapper around build.sh.
+# The OS is built ONLY inside the privileged Docker builder (the pipeline needs
+# chroot/mount/mknod, unavailable to an unprivileged `docker build`). Every build
+# target is a thin wrapper around ./docker-build.sh, which runs the build pipeline
+# (docker-entrypoint.sh) inside the container and writes the ISO to $(OUTPUT).
 
 SHELL     := /bin/bash
 SUDO      := sudo
-BUILD     := $(SUDO) ./build.sh
+BUILD     := ./docker-build.sh
 OUTPUT    := output/larch-os.iso
-
-# Make build.sh write the ISO to $(OUTPUT) so native builds, `make clean`,
-# and the test-qemu targets all agree on one path. Honour an externally set
-# LARCH_OUTPUT_ISO if the caller already exported one.
-export LARCH_OUTPUT_ISO ?= $(abspath $(OUTPUT))
 
 # QEMU display/VGA settings — overridable per machine.
 # Default is the most portable combo (no host GL). Intel/Mesa hosts can opt back
@@ -32,27 +29,15 @@ clean: ## Delete work directory and output ISO
 	$(BUILD) --clean
 
 .PHONY: install-deps
-install-deps: ## Install required build tools on the host
+install-deps: ## Install host-side tools for testing + dev-disk (the build itself only needs Docker)
 	apt-get update
 	apt-get install -y \
-	    debootstrap \
-	    squashfs-tools \
-	    xorriso \
-	    mtools \
 	    dosfstools \
+	    e2fsprogs \
 	    gdisk \
-	    systemd-boot \
-	    grub-common \
-	    grub-efi-amd64-bin \
-	    grub-pc-bin \
-	    busybox-static \
-	    xz-utils \
-	    zstd \
-	    gzip \
 	    ovmf \
 	    qemu-system-x86 \
-	    qemu-utils \
-	    cpio
+	    qemu-utils
 
 ## ── Incremental rebuild targets ──────────────────────────────────────────────
 
@@ -68,27 +53,21 @@ initramfs: ## Re-build initramfs only (stage 7)
 iso-only: ## Re-assemble and re-pack ISO (stages 8+9) — skips rootfs build
 	$(BUILD) --stage 8
 
-## ── Docker build ─────────────────────────────────────────────────────────────
-
-.PHONY: docker
-docker: ## Full build inside Docker (ISO → output/larch-os.iso)
-	./docker-build.sh
+## ── Docker build modes ───────────────────────────────────────────────────────
+# `iso`, `clean`, `squashfs`, `initramfs`, `iso-only` above already run in Docker.
+# These expose modes the main targets don't.
 
 .PHONY: docker-dev
 docker-dev: ## Docker build with source bind-mounted (fast iteration)
 	./docker-build.sh --dev
 
 .PHONY: docker-stage
-docker-stage: ## Resume Docker build from a stage: make docker-stage STAGE=6
+docker-stage: ## Resume Docker build from an arbitrary stage: make docker-stage STAGE=6
 	./docker-build.sh --stage $(STAGE)
 
 .PHONY: docker-shell
 docker-shell: ## Open a shell inside the builder container
 	./docker-build.sh --shell
-
-.PHONY: docker-clean
-docker-clean: ## Remove output/ and work/ directories
-	./docker-build.sh --clean
 
 ## ── Testing ──────────────────────────────────────────────────────────────────
 

@@ -13,9 +13,10 @@
 #   --reflash    swap only initramfs.img + the per-machine config files on PART1;
 #                leaves PART1 bootloader and PART2 /home alone (fast OS iteration)
 #
-# Artifacts are read from work/iso/ (produced by build.sh stage 8). Run a normal
-# build first (at minimum through stage 8). For OS-only changes the fast loop is:
-#   sudo ./build.sh --stage 6      # rebuild squashfs + OS initramfs
+# Artifacts are read from work/iso/ (produced by stage 8 of the Docker build). Run
+# a normal build first (at minimum through stage 8). For OS-only changes the fast
+# loop is:
+#   ./docker-build.sh --stage 6    # rebuild squashfs + OS initramfs (in the container)
 #   sudo ./scripts/make-dev-disk.sh --reflash
 #   make test-qemu-dev
 #
@@ -28,7 +29,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_DIR="$SCRIPT_DIR/work"
-ISO_SRC="$WORK_DIR/iso"               # populated by build.sh stage 8
+ISO_SRC="$WORK_DIR/iso"               # populated by stage 8 of the Docker build
 ROOTFS_DIR="$WORK_DIR/rootfs"         # for /etc/skel seeding
 DISK_IMG="${DEV_DISK_IMG:-$WORK_DIR/dev-disk.img}"
 DISK_SIZE="${DEV_DISK_SIZE:-12G}"
@@ -175,4 +176,4 @@ echo ""
 info "Done. Pre-installed dev disk ready: $DISK_IMG"
 info "  hostname=$DEV_HOSTNAME  user=$DEV_USERNAME  password=$DEV_PASSWORD"
 info "Boot it with:  make test-qemu-dev"
-info "After OS edits: sudo ./build.sh --stage 6 && sudo $0 --reflash"
+info "After OS edits: ./docker-build.sh --stage 6 && sudo $0 --reflash"
