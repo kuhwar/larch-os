@@ -7,7 +7,7 @@
 #
 # After building the overlayfs the init script finds the LARCHOS FAT32 partition
 # (label=LARCHOS) and applies the user config from the installer:
-#   hostname · hosts · passwd (UID 1000) · shadow · group (username) · sudoers
+#   hostname · hosts · passwd (UID 1000) · shadow · group (username)
 #
 # Sequence:
 #   load modules → loop-mount /rootfs.squashfs → overlayfs →
@@ -207,13 +207,6 @@ if [ -b "$LARCHOS_DEV" ]; then
         # rm against the overlay mount records a whiteout in the tmpfs upper layer;
         # the read-only squashfs lower layer is untouched. Live mode keeps /home/larch.
         rm -rf "/mnt/root/home/larch" 2>/dev/null || true
-    fi
-
-    # /etc/sudoers.d/larch-os-user
-    if [ -f "$CFG/sudoers" ]; then
-        mkdir -p /mnt/root/etc/sudoers.d
-        cp "$CFG/sudoers" /mnt/root/etc/sudoers.d/larch-os-user
-        chmod 440 /mnt/root/etc/sudoers.d/larch-os-user
     fi
 
     # /etc/fstab — mounts LARCHHOME at /home/<username>

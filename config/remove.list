@@ -14,3 +14,7 @@ dpkg-dev
 debianutils
 tasksel
 tasksel-data
+
+# No privilege escalation on the immutable OS — root is locked and there is no
+# admin path; updates happen from install/upgrade media, not in-session.
+sudo

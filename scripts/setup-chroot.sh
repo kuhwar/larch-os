@@ -45,11 +45,13 @@ log "Creating default user 'larch'"
 # Create user with home directory; password is 'larch' (change before shipping)
 useradd -m -s /bin/bash -c "Larch User" larch
 echo "larch:larch" | chpasswd
-# Allow sudo for larch user
-echo "larch ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/larch
-chmod 0440 /etc/sudoers.d/larch
-# Add to relevant groups
-usermod -aG audio,video,input,netdev,plugdev,sudo larch
+# No sudo on larch-os. The base OS is immutable and updated only from
+# install/upgrade media, so the user has no admin escalation path; root is
+# locked below and the sudo package is purged via remove.list. Deliberately
+# NOT added to the `sudo` group — that group is polkit's admin identity, so
+# leaving the user in it would let privileged polkit actions be authorized
+# with the user's own password, re-opening an escalation path.
+usermod -aG audio,video,input,netdev,plugdev larch
 
 # ── Systemd services ─────────────────────────────────────────────────────────
 log "Enabling systemd services"

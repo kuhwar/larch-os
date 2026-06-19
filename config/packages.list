@@ -42,7 +42,6 @@ curl
 wget
 ca-certificates
 openssl
-sudo
 login
 passwd
 adduser

@@ -5,7 +5,7 @@
 # The live ISO is mounted at /mnt/iso.
 #
 # Asks for:  hostname · username · password · target disk
-# Creates:   /larch-os/{hostname,hosts,passwd,shadow,sudoers,username} on LARCHOS
+# Creates:   /larch-os/{hostname,hosts,passwd,shadow,username} on LARCHOS
 # The OS initramfs reads these on every boot and merges them into the overlayfs.
 #
 # Tools used (all in the fat installer initramfs):
@@ -209,10 +209,7 @@ printf '%s:%s:%d:0:99999:7:::\n' "$LARCH_USERNAME" "$pw_hash" "$today_days" \
     > "$CONFIG_TMP/shadow"
 chmod 600 "$CONFIG_TMP/shadow"
 
-# /etc/sudoers.d entry
-printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$LARCH_USERNAME" > "$CONFIG_TMP/sudoers"
-
-# username record (read by OS init to update /etc/group and sudoers)
+# username record (read by OS init to rename the user's group)
 printf '%s\n' "$LARCH_USERNAME" > "$CONFIG_TMP/username"
 
 # /etc/fstab — mounts LARCHHOME at /home/<username>
@@ -262,7 +259,6 @@ cp "$CONFIG_TMP/hostname" "$MOUNT_OS/larch-os/hostname"
 cp "$CONFIG_TMP/hosts"    "$MOUNT_OS/larch-os/hosts"
 cp "$CONFIG_TMP/passwd"   "$MOUNT_OS/larch-os/passwd"
 cp "$CONFIG_TMP/shadow"   "$MOUNT_OS/larch-os/shadow"
-cp "$CONFIG_TMP/sudoers"  "$MOUNT_OS/larch-os/sudoers"
 cp "$CONFIG_TMP/username" "$MOUNT_OS/larch-os/username"
 cp "$CONFIG_TMP/fstab"    "$MOUNT_OS/larch-os/fstab"
 chmod 640 "$MOUNT_OS/larch-os/shadow"
