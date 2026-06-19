@@ -115,6 +115,9 @@ if [ "$REFLASH" -eq 1 ]; then
     info "Swapping initramfs.img (fat image — embeds the new squashfs)"
     cp "$ISO_SRC/larch-os/initramfs.img" "$MNT_OS/larch-os/initramfs.img"
     cp "$ISO_SRC/vmlinuz"                "$MNT_OS/larch-os/vmlinuz"
+    info "Refreshing bootloader config (loader.conf + entries) and EFI binary"
+    cp -r "$ISO_SRC/larch-os/loader/."  "$MNT_OS/loader/"
+    cp "$ISO_SRC/larch-os/bootx64.efi"  "$MNT_OS/EFI/BOOT/BOOTX64.EFI"
     gen_config
     write_config_files
     rm -rf "$CFG"
