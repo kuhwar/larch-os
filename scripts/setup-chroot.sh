@@ -63,6 +63,16 @@ systemctl disable apt-daily-upgrade.timer  2>/dev/null || true
 systemctl disable unattended-upgrades      2>/dev/null || true
 systemctl disable packagekit               2>/dev/null || true
 
+# No dpkg on the immutable OS — the dpkg database backup timer has nothing to
+# back up and its helper is purged with apt/dpkg. Mask so it can't be pulled in.
+systemctl mask dpkg-db-backup.timer        2>/dev/null || true
+
+# NetworkManager is the sole network manager (always-DHCP design). Disable the
+# ifupdown service and the standalone wpa_supplicant unit so they don't race NM
+# for interface control. (NM drives wpa_supplicant over D-Bus, not via this unit.)
+systemctl disable networking.service       2>/dev/null || true
+systemctl disable wpa_supplicant.service   2>/dev/null || true
+
 # Enable PipeWire audio
 systemctl --global enable pipewire.socket     2>/dev/null || true
 systemctl --global enable pipewire-pulse.socket 2>/dev/null || true
