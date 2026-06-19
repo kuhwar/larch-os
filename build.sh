@@ -179,8 +179,21 @@ build_initramfs() {
         # because after a compressed segment the kernel's input pointer does not land
         # cleanly on the next archive.
         info "[$label] Pass 1: appending rootfs.squashfs raw (pre-compressed)"
+        # Flush the squashfs (often just written by stage 6) before cpio reads it:
+        # on a bind-mounted volume a freshly written 500M+ file has intermittently
+        # been read short here, silently producing an initramfs with no embedded
+        # squashfs (82M instead of ~560M) and an unbootable installed OS.
+        sync
         (cd "$build_dir" && echo "./rootfs.squashfs" | \
             cpio --create --format=newc --quiet) > "$out_file"
+        # Hard guard: the raw cpio MUST be at least as large as the squashfs it
+        # wraps. If it is short, Pass 1 read the file before it was fully visible —
+        # fail loudly rather than ship a broken (squashfs-less) initramfs.
+        local sqsz p1sz
+        sqsz=$(stat -c %s "$build_dir/rootfs.squashfs")
+        p1sz=$(stat -c %s "$out_file")
+        [ "$p1sz" -ge "$sqsz" ] || \
+            die "[$label] Pass 1 truncated: cpio is $p1sz bytes but rootfs.squashfs is $sqsz — squashfs not embedded"
         info "[$label] Pass 2: compressing base files"
         (cd "$build_dir" && find . ! -name "rootfs.squashfs" | \
             cpio --create --format=newc --quiet) | gzip -9 >> "$out_file"

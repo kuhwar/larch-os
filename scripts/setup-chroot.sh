@@ -73,6 +73,28 @@ systemctl mask dpkg-db-backup.timer        2>/dev/null || true
 systemctl disable networking.service       2>/dev/null || true
 systemctl disable wpa_supplicant.service   2>/dev/null || true
 
+# ── Boot splash (Plymouth + firmware BGRT logo) ──────────────────────────────
+# plymouth-start.service is pulled into sysinit.target by a vendor .wants
+# symlink, so no explicit enable is needed; it shows the splash once systemd
+# is up (kernel cmdline carries `splash`). Set the bgrt theme as the default.
+log "Configuring Plymouth boot splash (bgrt theme)"
+# -R would trigger update-initramfs, which this image does not use — omit it.
+plymouth-set-default-theme bgrt 2>/dev/null || true
+# Remove every theme except bgrt and what it needs: spinner (bgrt's ImageDir
+# for the throbber assets) and the text/details fallbacks plymouth requires.
+# Iterate over whatever is actually installed (Debian's default set is bgrt,
+# ceratopsian, emerald, homeworld, joy, lines, moonlight, softwaves, ...).
+if [ -d /usr/share/plymouth/themes ]; then
+    # Glob without a trailing slash so symlink themes (e.g. desktop-base's
+    # `debian-theme`) are removed as the symlink itself, not followed.
+    for _theme in /usr/share/plymouth/themes/*; do
+        case "$(basename "$_theme")" in
+            bgrt|spinner|text|details|default.plymouth) : ;;   # keep
+            *) rm -rf "$_theme" ;;
+        esac
+    done
+fi
+
 # Enable PipeWire audio
 systemctl --global enable pipewire.socket     2>/dev/null || true
 systemctl --global enable pipewire-pulse.socket 2>/dev/null || true

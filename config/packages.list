@@ -78,6 +78,13 @@ eog
 evince
 gedit
 
+# ── Boot splash (OEM/firmware logo via BGRT) ─────────────────────────────────
+# plymouth shows a graphical splash; the bgrt theme reuses the firmware's
+# ACPI BGRT logo (the manufacturer logo) so boot continues that image instead
+# of scrolling logs. Started from systemd post-switch_root (sysinit.target).
+plymouth
+plymouth-themes
+
 # ── Flatpak / portals ────────────────────────────────────────────────────────
 flatpak
 xdg-desktop-portal
