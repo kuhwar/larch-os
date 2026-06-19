@@ -1,0 +1,10 @@
+# Keep the larch-os system/boot partition (label LARCHOS) out of the desktop.
+#
+# UDISKS_IGNORE=1 makes udisks2 (and therefore GNOME Files / the Shell mount
+# UI) ignore the device entirely: it is not listed and cannot be mounted from
+# the session. The OS initramfs reads LARCHOS directly by label very early in
+# boot — before udev and udisks exist — so this does not affect booting or the
+# per-machine config it applies. It only stops the logged-in user from browsing
+# or mounting the system partition, which holds shadow, sudoers and the
+# initramfs that defines the OS.
+SUBSYSTEM=="block", ENV{ID_FS_LABEL}=="LARCHOS", ENV{UDISKS_IGNORE}="1"
