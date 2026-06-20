@@ -113,10 +113,15 @@ fonts-dejavu
 fonts-liberation
 
 # ── Installer dependencies ───────────────────────────────────────────────────
+# The installer runs in the booted live system (udev loads all drivers), so it
+# uses these real tools directly: sfdisk/lsblk/losetup/blkid (util-linux, base),
+# mkfs.fat (dosfstools), mkfs.ext4 (e2fsprogs), openssl, and cpio/gzip to wrap
+# the recovered squashfs into the target's OS initramfs at install time.
 gdisk
 dosfstools
 e2fsprogs
 systemd-boot
+cpio
 
 # ── Firmware (broad coverage for common hardware) ────────────────────────────
 firmware-linux-free

@@ -36,6 +36,13 @@ ata_piix
 nvme
 nvme_core
 
+# ── USB core (required by every USB driver: host controllers, storage, HID) ─
+# Loadable modules in Trixie (NOT built-in). The build copies only the modules
+# named here — it does not resolve modules.dep — so without these xhci_hcd /
+# usb_storage / usbhid all fail to load. Names match the .ko FILENAMES.
+usb-common
+usbcore
+
 # ── USB storage (thumb drives / external SATA adapters) ───────────
 sd_mod
 usb_storage
@@ -45,7 +52,11 @@ xhci_pci
 ehci_pci
 uhci_hcd
 
-# ── Input (emergency shell) ───────────────────────────────────────
+# ── Input (emergency shell keyboard) ──────────────────────────────
+# USB keyboards need the HID stack; hid + hid-generic are loadable modules
+# (not built-in). PS/2 keyboards work without these (i8042/atkbd are built-in).
+# NOTE: the file is hid-generic.ko (hyphen); "hid_generic" never matched it.
+hid
 usbhid
-hid_generic
+hid-generic
 evdev

@@ -75,8 +75,9 @@ entrypoint.
 | `rootfs-overlay/` files | `./docker-build.sh --stage 3` |
 | `config/packages.list` or `scripts/setup-chroot.sh` | `./docker-build.sh --stage 4` |
 | `scripts/clean-rootfs.sh` or `config/remove.list` | `./docker-build.sh --stage 5` |
-| `initramfs/installer/` or `initramfs/os/` or `installer/install.sh` | `./docker-build.sh --only 7` (or `make initramfs`) |
-| Bootloader configs only | `./docker-build.sh --stage 8` (or `make iso-only`) |
+| `installer/install.sh`, `config/packages.list`, or `rootfs-overlay/` (incl. `larch-installer.service`) | `./docker-build.sh --stage 6` (the installer + its payload live in the squashfs now) |
+| `initramfs/os/` (init or modules.list) | `./docker-build.sh --stage 6` (the base image is rebuilt into the squashfs at stage 6, the bootable initramfs at stage 7) |
+| Bootloader configs only | `./docker-build.sh --stage 6` (loader configs are staged into the squashfs payload) |
 
 ### Test in QEMU
 
@@ -103,44 +104,49 @@ Nine stages executed in order; `--stage N` skips stages before N, `--only N` run
 3. **copy-overlay** — `cp -a rootfs-overlay/. work/rootfs/` (overlay wins over debootstrap defaults)
 4. **chroot-configure** — bind-mounts proc/sys/dev, then runs `scripts/setup-chroot.sh` inside chroot; copies `config/packages.list` and `config/remove.list` into the chroot before invoking it
 5. **clean-rootfs** — runs `scripts/clean-rootfs.sh` inside chroot to physically remove apt/dpkg and dev headers
-6. **make-squashfs** — `mksquashfs work/rootfs work/rootfs.squashfs -comp zstd -Xcompression-level 19`
-7. **build-initramfs** — builds the OS initramfs first, then **bakes it (plus the kernel, EFI binary, and loader config) into the installer initramfs** at `/payload` (see below); decompresses `.ko.xz`/`.ko.zst` modules (busybox modprobe cannot load compressed modules), patches `modules.dep`
-8. **assemble-iso** — builds `work/iso/` directory tree (just the kernel + installer initramfs + grub.cfg — a pure boot carrier)
+6. **make-squashfs** — first stages the **installer payload** into the rootfs (`install_os_payload_into_rootfs`: the OS `initramfs-base.img`, `bootx64.efi`, loader config under `/usr/lib/larch/payload/`, plus `installer/install.sh` → `/usr/sbin/larch-install`), then `mksquashfs work/rootfs work/rootfs.squashfs -comp zstd -Xcompression-level 19`. Decompresses `.ko.xz`/`.ko.zst` modules in the base image and patches `modules.dep` (busybox modprobe cannot load compressed modules).
+7. **build-initramfs** — builds the single bootable OS initramfs (`work/initramfs.img`): `rootfs.squashfs` appended raw, then the gzip base. This same image boots the live ISO and the installed disk.
+8. **assemble-iso** — builds `work/iso/` directory tree (kernel + OS initramfs + grub.cfg — a pure boot carrier)
 9. **make-iso** — `grub-mkrescue -d /usr/lib/grub/x86_64-efi -o larch-os.iso work/iso/ -- -volid LARCHOS` (`-d` pins a single GRUB platform so the ISO is **UEFI-only** — no BIOS El Torito image even if `grub-pc-bin` is installed)
 
-### Two initramfs images
+### One initramfs, two roles (no separate installer initramfs)
 
-Stage 7 produces two self-contained ("fat") initramfs files via the shared `build_initramfs()` function. The OS initramfs is built **first** because it is then baked, whole, into the installer initramfs:
+There is a **single** OS initramfs (`work/initramfs.img`, source `initramfs/os/`, built by `build_initramfs()`). It embeds `rootfs.squashfs` and boots the real OS. It is used unchanged for both the live ISO and the installed disk — what differs is only the kernel cmdline:
 
-| Output file | Source dir | Extras baked in | Purpose |
-|---|---|---|---|
-| `work/initramfs.img` | `initramfs/os/` | `rootfs.squashfs` (raw, uncompressed cpio append) | Baked into the installer initramfs; install.sh writes it to the installed disk; boots the OS |
-| `work/installer.img` | `initramfs/installer/` | `install.sh` + `mke2fs`/`openssl`/`sfdisk`/`mkdosfs` + shared libs + the **entire OS payload at `/payload`** (kernel, OS `initramfs.img`, `bootx64.efi`, loader config) | Runs on ISO boot; drives the installer entirely from RAM |
+- **Installed disk** (systemd-boot): boots normally → graphical login.
+- **Live ISO** (GRUB): cmdline adds `larch.installer systemd.unit=multi-user.target`, so the system boots to a **text console** and `larch-installer.service` runs `/usr/sbin/larch-install` on tty1. Because this is the fully-booted OS, **systemd-udevd has auto-loaded every hardware driver** (keyboard, storage, …) — the installer no longer depends on a hand-maintained kernel-module list, which is why the keyboard works on any machine.
 
-**Why bake the payload in?** The installer never has to find or mount the boot medium. GRUB loads the installer initramfs into RAM, so `/payload` is present regardless of how the disc was booted — optical, raw-`dd`'d USB, or **Ventoy** (which loopback-boots the ISO and never exposes it as a Linux block device). The old "scan for the ISO9660 volume / loop-mount the .iso" logic is gone.
+**The installer reassembles the disk image; it does not carry a second copy.** Storing the squashfs once (in the booting initramfs) means `install.sh` must rebuild the target's OS initramfs at install time:
 
-**Two-pass cpio packing** applies to the OS initramfs only: small files are gzip-9 compressed in one cpio pass; `rootfs.squashfs` (already zstd-compressed) is appended as a second raw uncompressed cpio block, so the squashfs is never double-compressed. The installer initramfs is a single gzip pass (its embedded OS `initramfs.img` rides along inside `/payload`).
+```
+target initramfs.img  =  raw-cpio(rootfs.squashfs)  ++  initramfs-base.img
+```
+
+- `rootfs.squashfs` is **recovered from the live root's loop device** (`blkid` finds the loop whose `TYPE=squashfs`) with `dd` — no second copy is stored on the ISO or in RAM.
+- `initramfs-base.img` is the **"pass 2" half** of the OS initramfs (busybox + modules + init, *no* squashfs), built once at stage 6 by `build_initramfs_base()` and baked into the squashfs at `/usr/lib/larch/payload/`.
+
+This reproduces byte-for-byte the same two-pass early-cpio layout `build_initramfs()` produces for the ISO. **Two-pass ordering still matters**: the raw (uncompressed) squashfs cpio MUST come first, the gzip base second.
 
 ### ISO layout (`work/iso/`)
 
 ```
 /vmlinuz                          ← kernel        (GRUB: linux /vmlinuz)
-/initramfs.img                    ← installer initramfs (fat; embeds /payload = full OS payload)
+/initramfs.img                    ← OS initramfs (embeds rootfs.squashfs); GRUB cmdline routes it to installer mode
 /boot/grub/grub.cfg               ← GRUB2 menu (path is fixed by grub-mkrescue)
 ```
 
-The ISO is a pure boot carrier — GRUB boots these two files. Everything the installer copies to the target disk lives inside `/initramfs.img` at `/payload/`, not on the ISO.
+The ISO is a pure boot carrier — GRUB boots these two files. The installer payload (`initramfs-base.img`, EFI, loader, `larch-install`) lives **inside the squashfs**, not loose on the ISO.
 
 ### Boot flow
 
-**ISO/live:** GRUB2 → `/vmlinuz` + `/initramfs.img` (installer initramfs) → `install.sh` runs, reading the OS payload from `/payload`
+**ISO/live:** GRUB2 → `/vmlinuz` + `/initramfs.img` → OS init mounts squashfs/overlay → `switch_root` to systemd → (cmdline `larch.installer`) `larch-installer.service` runs `/usr/sbin/larch-install` on tty1, with udev-loaded drivers
 
-**Installed disk:** systemd-boot → `/larch-os/vmlinuz` + `/larch-os/initramfs.img` (OS initramfs) → systemd
+**Installed disk:** systemd-boot → `/larch-os/vmlinuz` + `/larch-os/initramfs.img` → OS init applies config → `switch_root` to systemd → graphical login
 
-**Installer initramfs (`initramfs/installer/init`)** — busybox sh PID 1:
-1. Loads storage + USB + FAT/ext4 modules (to reach and format the **target disk**)
-2. Sanity-checks that `/payload/larch-os/initramfs.img` is present
-3. `exec /install.sh` — which reads `/payload` and writes it to the target disk
+**Installer (`installer/install.sh`, shipped as `/usr/sbin/larch-install`)** — runs in the booted live system as root on tty1:
+1. Verifies the payload (`/usr/lib/larch/payload/…`) and locates the squashfs loop device
+2. Prompts for hostname/username/password/target disk
+3. Partitions + formats, **reassembles** the target `initramfs.img` (squashfs from loop + base), writes the bootloader and per-machine config to LARCHOS, seeds LARCHHOME, then `systemctl reboot`
 
 **OS initramfs (`initramfs/os/init`)** — busybox sh PID 1:
 1. Loads modules (squashfs/loop/overlay first, then storage/FAT drivers)
@@ -218,19 +224,18 @@ Partition 2 — ext4, remainder, label LARCHHOME
 | `scripts/clean-rootfs.sh` | Purges apt/dpkg and dev artifacts from rootfs before squashfs |
 | `config/packages.list` | Packages installed by `setup-chroot.sh` (comments and blank lines stripped) |
 | `config/remove.list` | Packages purged by `clean-rootfs.sh` after configuration |
-| `initramfs/installer/init` | Busybox sh PID 1 for the installer; loads target-disk modules, then execs install.sh (no ISO to find — payload is baked in at `/payload`) |
-| `initramfs/installer/modules.list` | Modules for the installer initramfs (storage + USB + FAT/ext4 to reach and format the target disk) |
-| `initramfs/os/init` | Busybox sh PID 1 for the installed OS; mounts squashfs, overlayfs, applies config from LARCHOS |
-| `initramfs/os/modules.list` | Modules for the OS initramfs (squashfs/overlay + storage drivers for LARCHOS) |
-| `installer/install.sh` | Prompts for hostname/username/password, partitions disk, formats, copies OS payload from `/payload` and config files to LARCHOS, seeds home partition |
+| `initramfs/os/init` | Busybox sh PID 1 (live ISO **and** installed disk); mounts squashfs, overlayfs, applies config from LARCHOS, `switch_root`s to systemd |
+| `initramfs/os/modules.list` | Modules for the OS initramfs (squashfs/overlay + storage drivers to find LARCHOS). Note: this only needs to get to `switch_root`; **all** other hardware (incl. the installer's keyboard) is loaded by udev afterward |
+| `installer/install.sh` | The installer, shipped as `/usr/sbin/larch-install`. Runs in the booted live system on tty1: prompts, partitions, **reassembles** the target `initramfs.img` (squashfs from loop + base), writes bootloader + config to LARCHOS, seeds home |
+| `rootfs-overlay/etc/systemd/system/larch-installer.service` | Runs `larch-install` on tty1 when the cmdline has `larch.installer`; gated by `ConditionKernelCommandLine` so it is inert on installed disks |
 | `rootfs-overlay/` | Files copied verbatim into rootfs at stage 3; mirror the target path |
 
 ## Common customisation patterns
 
 - **Add a package:** edit `config/packages.list`, re-run from stage 4
 - **Add a system config file:** drop it in `rootfs-overlay/` mirroring its final path, re-run from stage 3
-- **Add/remove a kernel module in the OS initramfs:** edit `initramfs/os/modules.list` and the `load_mod` calls in `initramfs/os/init`, re-run `--only 7`
-- **Add/remove a kernel module in the installer initramfs:** edit `initramfs/installer/modules.list` and `initramfs/installer/init`, re-run `--only 7`
+- **Add/remove a kernel module in the OS initramfs:** edit `initramfs/os/modules.list` and the `load_mod` calls in `initramfs/os/init`, re-run from **stage 6** (the base image is rebuilt into the squashfs there). Only modules needed to reach `switch_root` belong here — everything else is loaded by udev in the live system.
+- **Change the installer behaviour:** edit `installer/install.sh` (or `larch-installer.service`), re-run from **stage 6** (both ship inside the squashfs)
 - **Change the default live user or password:** edit `scripts/setup-chroot.sh`, re-run from stage 4
 - **Enable autologin:** edit `rootfs-overlay/etc/gdm3/custom.conf`, re-run from stage 3
 
@@ -238,7 +243,7 @@ Partition 2 — ext4, remainder, label LARCHHOME
 
 - **`set -euo pipefail`** is used throughout `docker-entrypoint.sh` — any unhandled command failure aborts the build
 - **Both init scripts use `set -e`** and run as PID 1; unhandled errors call `emergency_shell` (busybox sh on `/dev/console`); any command that may legitimately produce no output (e.g. `grep`, `ls`) must have `|| true`
-- **`.ko.xz` modules** (Trixie default): busybox `modprobe` cannot load XZ-compressed modules; stage 7 always decompresses them and patches `modules.dep` — do not skip this when adding modules
+- **`.ko.xz` modules** (Trixie default): busybox `modprobe` cannot load XZ-compressed modules; `populate_initramfs_tree()` always decompresses them and patches `modules.dep` (runs for both the stage-6 base image and the stage-7 bootable initramfs) — do not skip this when adding modules
 - **`rootfs.squashfs` is not a separate file on the installed disk** — it is embedded inside `initramfs.img` as a raw uncompressed cpio append; never double-compress it
 - **`work/` contents are root-owned** (created inside the privileged container); use `./docker-build.sh --clean` rather than `rm -rf work/` to avoid permission errors
 - **Output ISO path** is controlled by `$LARCH_OUTPUT_ISO` env var (defaults to `$SCRIPT_DIR/larch-os.iso`; Docker sets it to `/output/larch-os.iso`)

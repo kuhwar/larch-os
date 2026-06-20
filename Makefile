@@ -46,7 +46,7 @@ squashfs: ## Re-run squashfs stage only (stage 6) — use after rootfs edits
 	$(BUILD) --stage 6
 
 .PHONY: initramfs
-initramfs: ## Re-build initramfs only (stage 7)
+initramfs: ## Re-pack the bootable OS initramfs from the existing squashfs (stage 7). NOTE: installer/payload/module changes live in the squashfs — use `make squashfs` (stage 6) for those.
 	$(BUILD) --only 7
 
 .PHONY: iso-only
@@ -99,6 +99,27 @@ test-qemu-install: ## Test installation: boot ISO + attach a blank 20G disk
 	    -bios /usr/share/ovmf/OVMF.fd \
 	    -cdrom $(OUTPUT) \
 	    -drive file=work/test-disk.img,format=qcow2,if=virtio \
+	    -vga $(QEMU_VGA) \
+	    -display $(QEMU_DISPLAY) \
+	    -device virtio-net,netdev=net0 \
+	    -netdev user,id=net0
+
+.PHONY: test-qemu-install-usb
+test-qemu-install-usb: ## Like test-qemu-install but with a USB keyboard+mouse (exercises the USB-HID module fix)
+	@[ -f "$(OUTPUT)" ] || { echo "Run 'make iso' first"; exit 1; }
+	@[ -f work/test-disk.img ] || \
+	    qemu-img create -f qcow2 work/test-disk.img 20G
+	qemu-system-x86_64 \
+	    -enable-kvm \
+	    -m 4G \
+	    -cpu host \
+	    -smp 2 \
+	    -bios /usr/share/ovmf/OVMF.fd \
+	    -cdrom $(OUTPUT) \
+	    -drive file=work/test-disk.img,format=qcow2,if=virtio \
+	    -device qemu-xhci,id=xhci \
+	    -device usb-kbd,bus=xhci.0 \
+	    -device usb-mouse,bus=xhci.0 \
 	    -vga $(QEMU_VGA) \
 	    -display $(QEMU_DISPLAY) \
 	    -device virtio-net,netdev=net0 \

@@ -80,6 +80,9 @@ load_mod nvme_core
 load_mod nvme
 
 load_mod sd_mod
+# USB core must load before any USB host controller / storage / HID driver.
+load_mod usb_common
+load_mod usbcore
 load_mod usb_storage
 load_mod uas
 load_mod xhci_hcd
@@ -87,6 +90,9 @@ load_mod xhci_pci
 load_mod ehci_pci
 load_mod uhci_hcd
 
+# HID stack so a USB keyboard works in the emergency shell. hid (core) must
+# load before usbhid / hid_generic. PS/2 keyboards work without this (built-in).
+load_mod hid
 load_mod usbhid
 load_mod hid_generic
 load_mod evdev

@@ -29,8 +29,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_DIR="$SCRIPT_DIR/work"
-ISO_SRC="$WORK_DIR/iso"               # populated by stage 8 of the Docker build
-ROOTFS_DIR="$WORK_DIR/rootfs"         # for /etc/skel seeding
+ISO_SRC="$WORK_DIR/iso"               # vmlinuz (populated by stage 8 of the Docker build)
+ROOTFS_DIR="$WORK_DIR/rootfs"         # for /etc/skel seeding + the installer payload
+OS_INITRAMFS="$WORK_DIR/initramfs.img"           # the bootable OS initramfs (stage 7)
+PAYLOAD_SRC="$ROOTFS_DIR/usr/lib/larch/payload"  # bootx64.efi + loader/ staged into rootfs (stage 6)
 DISK_IMG="${DEV_DISK_IMG:-$WORK_DIR/dev-disk.img}"
 DISK_SIZE="${DEV_DISK_SIZE:-12G}"
 OS_PART_SIZE="3GiB"
@@ -48,10 +50,10 @@ info() { echo "  >> $*"; }
 [ "$(id -u)" -eq 0 ] || die "Must be run as root (loop devices / mount)"
 
 # ── Verify source artifacts ───────────────────────────────────────────────────
-[ -f "$ISO_SRC/vmlinuz" ]                || die "work/iso/vmlinuz missing — run the build through stage 8"
-[ -f "$ISO_SRC/larch-os/initramfs.img" ] || die "work/iso/larch-os/initramfs.img missing — run the build"
-[ -f "$ISO_SRC/larch-os/bootx64.efi" ]   || die "work/iso/larch-os/bootx64.efi missing — run the build"
-[ -d "$ISO_SRC/larch-os/loader" ]        || die "work/iso/larch-os/loader missing — run the build"
+[ -f "$ISO_SRC/vmlinuz" ]          || die "work/iso/vmlinuz missing — run the build through stage 8"
+[ -f "$OS_INITRAMFS" ]            || die "work/initramfs.img missing — run the build through stage 7"
+[ -f "$PAYLOAD_SRC/bootx64.efi" ] || die "payload bootx64.efi missing — run the build through stage 6"
+[ -d "$PAYLOAD_SRC/loader" ]      || die "payload loader/ missing — run the build through stage 6"
 
 # ── Loop / mount plumbing (shared) ────────────────────────────────────────────
 LOOP=""
@@ -113,11 +115,11 @@ if [ "$REFLASH" -eq 1 ]; then
     attach_loop
     mount -t vfat "${LOOP}p1" "$MNT_OS"
     info "Swapping initramfs.img (fat image — embeds the new squashfs)"
-    cp "$ISO_SRC/larch-os/initramfs.img" "$MNT_OS/larch-os/initramfs.img"
-    cp "$ISO_SRC/vmlinuz"                "$MNT_OS/larch-os/vmlinuz"
+    cp "$OS_INITRAMFS"        "$MNT_OS/larch-os/initramfs.img"
+    cp "$ISO_SRC/vmlinuz"     "$MNT_OS/larch-os/vmlinuz"
     info "Refreshing bootloader config (loader.conf + entries) and EFI binary"
-    cp -r "$ISO_SRC/larch-os/loader/."  "$MNT_OS/loader/"
-    cp "$ISO_SRC/larch-os/bootx64.efi"  "$MNT_OS/EFI/BOOT/BOOTX64.EFI"
+    cp -r "$PAYLOAD_SRC/loader/." "$MNT_OS/loader/"
+    cp "$PAYLOAD_SRC/bootx64.efi" "$MNT_OS/EFI/BOOT/BOOTX64.EFI"
     gen_config
     write_config_files
     rm -rf "$CFG"
@@ -147,12 +149,12 @@ mkfs.ext4 -q -L LARCHHOME -m 1 "${LOOP}p2"
 mount -t vfat "${LOOP}p1" "$MNT_OS"
 info "Installing EFI binary + bootloader config"
 install -d "$MNT_OS/EFI/BOOT"
-cp "$ISO_SRC/larch-os/bootx64.efi" "$MNT_OS/EFI/BOOT/BOOTX64.EFI"
-cp -r "$ISO_SRC/larch-os/loader"   "$MNT_OS/"
+cp "$PAYLOAD_SRC/bootx64.efi" "$MNT_OS/EFI/BOOT/BOOTX64.EFI"
+cp -r "$PAYLOAD_SRC/loader"   "$MNT_OS/"
 info "Copying kernel + OS initramfs"
 install -d "$MNT_OS/larch-os"
-cp "$ISO_SRC/vmlinuz"                "$MNT_OS/larch-os/vmlinuz"
-cp "$ISO_SRC/larch-os/initramfs.img" "$MNT_OS/larch-os/initramfs.img"
+cp "$ISO_SRC/vmlinuz"  "$MNT_OS/larch-os/vmlinuz"
+cp "$OS_INITRAMFS"     "$MNT_OS/larch-os/initramfs.img"
 gen_config
 write_config_files
 sync

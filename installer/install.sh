@@ -1,34 +1,39 @@
-#!/bin/sh
+#!/bin/bash
 # installer/install.sh — larch-os disk installer
 #
-# Runs inside the installer initramfs (exec'd by /init). The entire OS payload
-# (kernel, OS initramfs, EFI binary, loader config) is baked into the initramfs
-# at /payload, so there is no ISO to mount — the source files are already in RAM.
+# Shipped in the OS image as /usr/sbin/larch-install and launched by
+# larch-installer.service on tty1 when the ISO is booted (kernel cmdline carries
+# `larch.installer`). It therefore runs in the FULLY BOOTED live system: systemd
+# is up and systemd-udevd has already auto-loaded every hardware driver. That is
+# the whole point of the design — the installer relies on udev for hardware, so
+# the keyboard and target disk work on any machine without a hand-maintained
+# kernel-module list.
 #
 # Asks for:  hostname · username · password · target disk
-# Creates:   /larch-os/{hostname,hosts,passwd,shadow,username} on LARCHOS
-# The OS initramfs reads these on every boot and merges them into the overlayfs.
+# Writes to LARCHOS:  vmlinuz · initramfs.img · bootloader · per-machine config
+#                     ({hostname,hosts,passwd,shadow,username,fstab})
 #
-# Tools used (all in the fat installer initramfs):
-#   sfdisk       — GPT partitioning     (busybox)
-#   mkdosfs      — FAT32 formatting     (busybox)
-#   mke2fs       — ext4 formatting      (copied from rootfs with libs)
-#   openssl passwd  — password hashing   (copied from rootfs with libs)
-#   cp/mount/sync/reboot                (busybox)
+# The OS initramfs that boots the installed disk is REASSEMBLED here, not copied:
+# the squashfs (the live root's lower layer) is recovered from its loop device and
+# wrapped as a raw cpio, then the prebuilt gzip base image is appended — exactly
+# the two-pass early-cpio layout the OS initramfs expects:
+#       initramfs.img = raw-cpio(rootfs.squashfs)  ++  initramfs-base.img
+# This avoids storing the squashfs twice (once live, once as a payload).
+#
+# Tools all come from the live system (util-linux, dosfstools, e2fsprogs, openssl,
+# cpio, gzip) — no binaries are baked into an initramfs anymore.
 
 set -e
 
-# Busybox ash default PATH is /bin:/usr/bin only; our copied binaries live in
-# /usr/sbin and /sbin.  Set explicitly so all tools are reachable.
 export PATH=/usr/sbin:/sbin:/usr/bin:/bin
 
-# OS payload baked into this initramfs (see docker-entrypoint.sh stage 7).
-SRC="/payload"
+# Installer payload baked into the squashfs (see docker-entrypoint.sh stage 6).
+PAYLOAD="/usr/lib/larch/payload"
 OS_PART_SIZE="3GiB"
 TARGET_DISK=""
 AUTO_YES=0
-MOUNT_OS="/mnt/target-os"
-MOUNT_HOME="/mnt/target-home"
+MOUNT_OS="/run/larch-target-os"
+MOUNT_HOME="/run/larch-target-home"
 
 # User-supplied config (filled by prompt_config)
 LARCH_HOSTNAME=""
@@ -40,8 +45,8 @@ LARCH_PASSWORD=""
 die() {
     echo "" >&2
     echo "ERROR: $*" >&2
-    echo "Dropping to debug shell. Run 'reboot -f' when done." >&2
-    exec sh
+    echo "Dropping to a debug shell. Run 'systemctl reboot' when done." >&2
+    exec /bin/bash
 }
 info() { echo "  >> $*"; }
 nl()   { echo ""; }
@@ -60,13 +65,10 @@ cleanup() {
 trap cleanup EXIT
 
 # mount_or_die <fstype> <device> <mountpoint>
-# busybox `mount` without an explicit -t relies on probing /proc/filesystems,
-# which is unreliable for freshly-formatted partitions — always pass the type.
 mount_or_die() {
     _fstype="$1"; _dev="$2"; _mnt="$3"
     mount -t "$_fstype" "$_dev" "$_mnt" && return 0
-    info "Kernel filesystems available: $(tr '\n' ' ' < /proc/filesystems)"
-    die "Failed to mount $_dev at $_mnt as $_fstype — is the '$_fstype' kernel module loaded? (check the '[mod]' lines above for SKIP)"
+    die "Failed to mount $_dev at $_mnt as $_fstype"
 }
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
@@ -81,12 +83,27 @@ done
 
 [ "$(id -u)" -eq 0 ] || die "Must be run as root"
 
-# ── Verify baked-in payload ───────────────────────────────────────────────────
+# ── Verify payload + recover the squashfs ─────────────────────────────────────
 
-[ -f "$SRC/vmlinuz" ]                || die "vmlinuz not found in payload"
-[ -f "$SRC/larch-os/initramfs.img" ] || die "OS initramfs not found in payload"
-[ -f "$SRC/larch-os/bootx64.efi" ]   || die "EFI binary not found in payload"
-[ -d "$SRC/larch-os/loader" ]        || die "Bootloader config not found in payload"
+[ -f "$PAYLOAD/initramfs-base.img" ] || die "OS initramfs base not found in payload ($PAYLOAD/initramfs-base.img)"
+[ -f "$PAYLOAD/bootx64.efi" ]        || die "EFI binary not found in payload"
+[ -d "$PAYLOAD/loader" ]             || die "Bootloader config not found in payload"
+
+# The live root's lower layer is the squashfs, loop-mounted by the OS initramfs.
+# Find that loop device by filesystem type so we can read the raw image back.
+SQUASHFS_DEV=""
+for _l in /dev/loop*; do
+    [ -b "$_l" ] || continue
+    if [ "$(blkid -s TYPE -o value "$_l" 2>/dev/null)" = "squashfs" ]; then
+        SQUASHFS_DEV="$_l"; break
+    fi
+done
+[ -n "$SQUASHFS_DEV" ] || die "Could not locate the live squashfs loop device (is this the live ISO?)"
+
+# Kernel image to install (the live system's own kernel, from the squashfs /boot).
+VMLINUZ="$(ls -1 /boot/vmlinuz-* 2>/dev/null | sort -V | tail -1)"
+[ -f "$VMLINUZ" ] || VMLINUZ="$(readlink -f /boot/vmlinuz 2>/dev/null || true)"
+[ -f "$VMLINUZ" ] || die "Kernel image not found under /boot"
 
 # ── Prompt for system configuration ──────────────────────────────────────────
 
@@ -164,8 +181,8 @@ fi
 [ -b "$TARGET_DISK" ] || die "Not a block device: $TARGET_DISK"
 
 case "$TARGET_DISK" in
-    *nvme*) PART1="${TARGET_DISK}p1"; PART2="${TARGET_DISK}p2" ;;
-    *)      PART1="${TARGET_DISK}1";  PART2="${TARGET_DISK}2"  ;;
+    *nvme*|*mmcblk*) PART1="${TARGET_DISK}p1"; PART2="${TARGET_DISK}p2" ;;
+    *)              PART1="${TARGET_DISK}1";  PART2="${TARGET_DISK}2"  ;;
 esac
 
 # ── Confirm ───────────────────────────────────────────────────────────────────
@@ -187,7 +204,8 @@ confirm "Proceed with installation?" || { echo "Aborted."; exit 0; }
 
 # ── Generate config files ─────────────────────────────────────────────────────
 
-CONFIG_TMP="/tmp/larch-config"
+CONFIG_TMP="/run/larch-config"
+rm -rf "$CONFIG_TMP"
 mkdir -p "$CONFIG_TMP"
 
 info "Generating config files"
@@ -206,7 +224,7 @@ printf '%s:x:1000:1000:%s:/home/%s:/bin/bash\n' \
 # /etc/shadow entry — hash with SHA-512 via openssl passwd
 pw_hash=$(printf '%s' "$LARCH_PASSWORD" | openssl passwd -6 -stdin 2>/dev/null) \
     || die "Password hashing failed (openssl passwd -6 not available)"
-today_days=$(( $(busybox date +%s) / 86400 ))
+today_days=$(( $(date +%s) / 86400 ))
 printf '%s:%s:%d:0:99999:7:::\n' "$LARCH_USERNAME" "$pw_hash" "$today_days" \
     > "$CONFIG_TMP/shadow"
 chmod 600 "$CONFIG_TMP/shadow"
@@ -215,8 +233,6 @@ chmod 600 "$CONFIG_TMP/shadow"
 printf '%s\n' "$LARCH_USERNAME" > "$CONFIG_TMP/username"
 
 # /etc/fstab — mounts LARCHHOME at /home/<username>
-# tmpfs entries mirror the squashfs base fstab; LARCHHOME uses nofail so a
-# missing partition (should never happen on installed systems) does not hang boot.
 printf '# /etc/fstab — larch-os (generated by installer)\n'                    > "$CONFIG_TMP/fstab"
 printf 'tmpfs\t\t\t/tmp\t\ttmpfs\tdefaults,nosuid,nodev\t\t0\t0\n'           >> "$CONFIG_TMP/fstab"
 printf 'tmpfs\t\t\t/run\t\ttmpfs\tdefaults,nosuid,nodev\t\t0\t0\n'           >> "$CONFIG_TMP/fstab"
@@ -226,8 +242,10 @@ printf 'LABEL=LARCHHOME\t\t/home/%s\text4\tdefaults,relatime,nofail\t0\t2\n' \
 # ── Partition ─────────────────────────────────────────────────────────────────
 
 info "Creating GPT partition table on $TARGET_DISK"
+wipefs -a "$TARGET_DISK" 2>/dev/null || true
 printf 'label: gpt\nsize=%s, type=uefi, name=LARCHOS\ntype=linux, name=LARCHHOME\n' \
-    "$OS_PART_SIZE" | /usr/sbin/sfdisk -q "$TARGET_DISK"
+    "$OS_PART_SIZE" | sfdisk -q "$TARGET_DISK"
+partprobe "$TARGET_DISK" 2>/dev/null || true
 
 i=0
 while [ $i -lt 15 ]; do [ -b "$PART1" ] && [ -b "$PART2" ] && break; sleep 1; i=$((i+1)); done
@@ -237,39 +255,52 @@ while [ $i -lt 15 ]; do [ -b "$PART1" ] && [ -b "$PART2" ] && break; sleep 1; i=
 # ── Format PART1 and install OS files ────────────────────────────────────────
 
 info "Formatting OS partition as FAT32 ($PART1)"
-/usr/sbin/mkdosfs -F 32 -n LARCHOS "$PART1"
+mkfs.fat -F 32 -n LARCHOS "$PART1"
 
 mkdir -p "$MOUNT_OS"
 mount_or_die vfat "$PART1" "$MOUNT_OS"
 
 info "Installing EFI binary"
 mkdir -p "$MOUNT_OS/EFI/BOOT"
-cp "$SRC/larch-os/bootx64.efi" "$MOUNT_OS/EFI/BOOT/BOOTX64.EFI"
+cp "$PAYLOAD/bootx64.efi" "$MOUNT_OS/EFI/BOOT/BOOTX64.EFI"
 
 info "Copying bootloader config"
-cp -r "$SRC/larch-os/loader" "$MOUNT_OS/"
+cp -r "$PAYLOAD/loader" "$MOUNT_OS/"
 
 info "Copying kernel"
 mkdir -p "$MOUNT_OS/larch-os"
-cp "$SRC/vmlinuz" "$MOUNT_OS/larch-os/vmlinuz"
+cp "$VMLINUZ" "$MOUNT_OS/larch-os/vmlinuz"
 
-info "Copying OS initramfs (this may take a few minutes — fat image)"
-cp "$SRC/larch-os/initramfs.img" "$MOUNT_OS/larch-os/initramfs.img"
+# ── Reassemble the OS initramfs (squashfs + base) directly on the target ──────
+# Recover the squashfs from the live root's loop device, wrap it as a raw cpio,
+# then append the prebuilt gzip base image. This reproduces the exact two-pass
+# layout that docker-entrypoint.sh builds for the live ISO.
+info "Recovering OS image and assembling initramfs (a few minutes — large image)"
+DEST="$MOUNT_OS/larch-os"
+dd if="$SQUASHFS_DEV" of="$DEST/rootfs.squashfs" bs=4M status=none
+sync
+sqsz=$(stat -c %s "$DEST/rootfs.squashfs")
+( cd "$DEST" && echo "./rootfs.squashfs" | cpio --create --format=newc --quiet ) > "$DEST/initramfs.img"
+p1sz=$(stat -c %s "$DEST/initramfs.img")
+[ "$p1sz" -ge "$sqsz" ] || die "initramfs assembly truncated ($p1sz < $sqsz) — squashfs not embedded"
+cat "$PAYLOAD/initramfs-base.img" >> "$DEST/initramfs.img"
+rm -f "$DEST/rootfs.squashfs"
+sync
 
 info "Writing installation config to LARCHOS"
-cp "$CONFIG_TMP/hostname" "$MOUNT_OS/larch-os/hostname"
-cp "$CONFIG_TMP/hosts"    "$MOUNT_OS/larch-os/hosts"
-cp "$CONFIG_TMP/passwd"   "$MOUNT_OS/larch-os/passwd"
-cp "$CONFIG_TMP/shadow"   "$MOUNT_OS/larch-os/shadow"
-cp "$CONFIG_TMP/username" "$MOUNT_OS/larch-os/username"
-cp "$CONFIG_TMP/fstab"    "$MOUNT_OS/larch-os/fstab"
-chmod 640 "$MOUNT_OS/larch-os/shadow"
+cp "$CONFIG_TMP/hostname" "$DEST/hostname"
+cp "$CONFIG_TMP/hosts"    "$DEST/hosts"
+cp "$CONFIG_TMP/passwd"   "$DEST/passwd"
+cp "$CONFIG_TMP/shadow"   "$DEST/shadow"
+cp "$CONFIG_TMP/username" "$DEST/username"
+cp "$CONFIG_TMP/fstab"    "$DEST/fstab"
+chmod 640 "$DEST/shadow"
 
 sync
 umount "$MOUNT_OS"
 
 info "Formatting home partition as ext4 ($PART2)"
-/usr/sbin/mke2fs -t ext4 -L LARCHHOME -m 1 "$PART2"
+mkfs.ext4 -F -L LARCHHOME -m 1 "$PART2"
 sync
 
 # ── Seed home partition ───────────────────────────────────────────────────────
@@ -278,11 +309,9 @@ mkdir -p "$MOUNT_HOME"
 info "Seeding home partition for $LARCH_USERNAME"
 mount_or_die ext4 "$PART2" "$MOUNT_HOME"
 # LARCHHOME is mounted directly at /home/<username> at runtime, so seed /etc/skel
-# into the partition ROOT — NOT a /<username> subdir, which would surface as the
-# nested /home/<username>/<username>.
+# into the partition ROOT — NOT a /<username> subdir.
 cp -a /etc/skel/. "$MOUNT_HOME/" 2>/dev/null || true
 chown -R 1000:1000 "$MOUNT_HOME"
-# Keep lost+found owned by root so fsck is happy; the home root itself is the user's.
 chown 0:0 "$MOUNT_HOME/lost+found" 2>/dev/null || true
 chmod 0750 "$MOUNT_HOME"
 sync
@@ -304,4 +333,4 @@ echo ""
 echo "  Remove the installation media, then press Enter to reboot."
 echo "╚══════════════════════════════════════════════╝"
 read -r _
-reboot -f
+systemctl reboot

@@ -32,8 +32,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK_DIR="$SCRIPT_DIR/work"
 ROOTFS_DIR="$WORK_DIR/rootfs"
 SQUASHFS_FILE="$WORK_DIR/rootfs.squashfs"
-INITRAMFS_FILE="$WORK_DIR/initramfs.img"           # installed-OS initramfs
-INSTALLER_INITRAMFS_FILE="$WORK_DIR/installer.img" # live/installer initramfs
+INITRAMFS_FILE="$WORK_DIR/initramfs.img"           # the one OS initramfs (live ISO + installed disk)
 ISO_ROOT="$WORK_DIR/iso"
 OUTPUT_ISO="${LARCH_OUTPUT_ISO:-$SCRIPT_DIR/larch-os.iso}"
 
@@ -94,16 +93,13 @@ chroot_run_with_deps() {
     chroot "$ROOTFS_DIR" "/$basename"
 }
 
-build_initramfs() {
-    # Build a gzipped cpio initramfs from a source directory.
-    # Usage: build_initramfs <src_dir> <out_file> <label> [extras_dir]
-    #   src_dir   — directory containing init and modules.list
-    #   out_file  — output .img path
-    #   label     — short label used in log messages
-    #   extras_dir — optional directory whose contents are merged into the
-    #                initramfs root before packing (e.g. install.sh + mke2fs)
-    local src_dir="$1" out_file="$2" label="$3" extras_dir="${4:-}"
-    local build_dir="$WORK_DIR/initramfs-build-$label"
+populate_initramfs_tree() {
+    # Fill <build_dir> with the busybox userland, the kernel modules named in
+    # <src_dir>/modules.list, the init script and an empty /etc/modprobe.d.
+    # No squashfs and no extras — callers add those. Shared by build_initramfs
+    # (the bootable OS image) and build_initramfs_base (the standalone gzip base
+    # baked into the squashfs for the live installer to reassemble at install time).
+    local src_dir="$1" build_dir="$2" label="${3:-initramfs}"
     rm -rf "$build_dir"
     mkdir -p "$build_dir"/{bin,sbin,lib,lib64,dev,proc,sys,mnt/probe,mnt/squashfs,mnt/ospart,mnt/overlay,mnt/root,mnt/config,mnt/iso,run}
 
@@ -166,8 +162,18 @@ build_initramfs() {
     chmod +x "$build_dir/init"
 
     mkdir -p "$build_dir/etc/modprobe.d"
+}
 
-    # Merge optional extras (e.g. install.sh + mke2fs for the installer initramfs)
+build_initramfs() {
+    # Build a bootable gzipped cpio initramfs from <src_dir>.
+    # Usage: build_initramfs <src_dir> <out_file> <label> [extras_dir]
+    # If the merged tree contains rootfs.squashfs it is packed two-pass (raw
+    # squashfs cpio first, gzip base second); otherwise a single gzip pass.
+    local src_dir="$1" out_file="$2" label="$3" extras_dir="${4:-}"
+    local build_dir="$WORK_DIR/initramfs-build-$label"
+    populate_initramfs_tree "$src_dir" "$build_dir" "$label"
+
+    # Merge optional extras (e.g. rootfs.squashfs for the OS initramfs).
     if [ -n "$extras_dir" ] && [ -d "$extras_dir" ]; then
         info "[$label] Merging extras from $(basename "$extras_dir")"
         cp -a "$extras_dir/." "$build_dir/"
@@ -211,6 +217,50 @@ build_initramfs() {
     local sz
     sz=$(du -sh "$out_file" | cut -f1)
     info "[$label] Done: $(basename "$out_file") ($sz)"
+}
+
+build_initramfs_base() {
+    # Pack the OS initramfs base (busybox + modules + init, NO squashfs) as a
+    # standalone gzip cpio — the "pass 2" half of the two-pass OS initramfs.
+    # It is baked into the squashfs at /usr/lib/larch/payload so the live
+    # installer can reassemble the target's OS initramfs at install time:
+    #     initramfs.img = raw-cpio(rootfs.squashfs)  ++  initramfs-base.img
+    local src_dir="$1" out_file="$2"
+    local build_dir="$WORK_DIR/initramfs-base-build"
+    populate_initramfs_tree "$src_dir" "$build_dir" "os-base"
+    info "[os-base] Packing base cpio → $out_file"
+    rm -f "$out_file"
+    ( cd "$build_dir" && find . | cpio --create --format=newc --quiet ) | gzip -9 > "$out_file"
+    info "[os-base] Done: $(basename "$out_file") ($(du -sh "$out_file" | cut -f1))"
+}
+
+install_os_payload_into_rootfs() {
+    # Stage the installer payload INSIDE the rootfs (so it lands in the squashfs).
+    # The installer runs in the booted live system — where udev has loaded every
+    # driver — and uses this payload to build the target disk:
+    #   /usr/lib/larch/payload/initramfs-base.img  → reassembled into the disk's
+    #                                                 OS initramfs (+ the recovered
+    #                                                 squashfs)
+    #   /usr/lib/larch/payload/bootx64.efi          → systemd-boot
+    #   /usr/lib/larch/payload/loader/…             → bootloader config
+    #   /usr/sbin/larch-install                      → the installer itself
+    # Must run BEFORE mksquashfs (stage 6).
+    local pdir="$ROOTFS_DIR/usr/lib/larch/payload"
+    info "Staging installer payload into rootfs ($pdir)"
+    rm -rf "$pdir"
+    mkdir -p "$pdir/loader/entries"
+
+    build_initramfs_base "$SCRIPT_DIR/initramfs/os" "$pdir/initramfs-base.img"
+
+    local efi_bin; efi_bin="$(find_efi_bin)"
+    [ -f "$efi_bin" ] || die "systemd-boot EFI binary not found in rootfs"
+    cp "$efi_bin" "$pdir/bootx64.efi"
+
+    cp "$SCRIPT_DIR/bootloader/loader.conf"        "$pdir/loader/loader.conf"
+    cp "$SCRIPT_DIR/bootloader/entries/larch.conf" "$pdir/loader/entries/larch.conf"
+
+    install -m 755 "$SCRIPT_DIR/installer/install.sh" "$ROOTFS_DIR/usr/sbin/larch-install"
+    info "Payload staged (initramfs-base.img, bootx64.efi, loader/, /usr/sbin/larch-install)"
 }
 
 find_vmlinuz() {
@@ -341,6 +391,10 @@ run_stage 5 "clean-rootfs — strip package manager and build artifacts" && {
 
 # ── Stage 6: make-squashfs ────────────────────────────────────────────────────
 run_stage 6 "make-squashfs — compress rootfs into squashfs image" && {
+    # Stage the installer payload into the rootfs first so it is captured by the
+    # squashfs (the live installer reads it from /usr/lib/larch/payload).
+    install_os_payload_into_rootfs
+
     info "Creating squashfs (zstd compression)"
     rm -f "$SQUASHFS_FILE"
     mksquashfs "$ROOTFS_DIR" "$SQUASHFS_FILE" \
@@ -356,11 +410,17 @@ run_stage 6 "make-squashfs — compress rootfs into squashfs image" && {
 }
 
 # ── Stage 7: build-initramfs ──────────────────────────────────────────────────
-run_stage 7 "build-initramfs — build OS initramfs, then bake it into the installer initramfs" && {
-    # ── OS initramfs: fat — rootfs.squashfs is embedded directly ─────────────
-    # Built FIRST because the finished OS initramfs is baked, whole, into the
-    # installer initramfs below (the installer writes it to the target disk).
-    # Requires squashfs from stage 6.
+run_stage 7 "build-initramfs — build the live/OS initramfs (squashfs embedded)" && {
+    # One initramfs now serves both roles. It embeds rootfs.squashfs and boots
+    # the real OS. On the installed disk it boots normally; booted from the ISO
+    # (cmdline `larch.installer systemd.unit=multi-user.target`) it lands in a
+    # text console where larch-installer.service runs the installer — with udev
+    # having loaded every driver, so the keyboard works on any hardware.
+    #
+    # There is no longer a separate "installer initramfs": the installer runs in
+    # the booted live system using real tools, and reassembles a copy of THIS
+    # initramfs onto the target from the squashfs (recovered at install time) plus
+    # the prebuilt /usr/lib/larch/payload/initramfs-base.img staged in stage 6.
     [ -f "$SQUASHFS_FILE" ] || \
         die "rootfs.squashfs not found ($SQUASHFS_FILE) — run stage 6 first"
 
@@ -371,128 +431,16 @@ run_stage 7 "build-initramfs — build OS initramfs, then bake it into the insta
     cp "$SQUASHFS_FILE" "$OS_EXTRAS/rootfs.squashfs"
 
     build_initramfs "$SCRIPT_DIR/initramfs/os" "$INITRAMFS_FILE" "os" "$OS_EXTRAS"
-
-    # ── Installer extras: install.sh + mke2fs (with shared libs) ─────────────
-    # The installer initramfs is "fat" — self-contained, no squashfs needed.
-    # install.sh is baked in so the initramfs init can exec it directly.
-    # mke2fs (from e2fsprogs in the rootfs) is included for ext4 home partition.
-    INSTALLER_EXTRAS="$WORK_DIR/installer-extras"
-    rm -rf "$INSTALLER_EXTRAS"
-    mkdir -p "$INSTALLER_EXTRAS"
-
-    info "[installer] Baking install.sh into initramfs"
-    install -m 755 "$SCRIPT_DIR/installer/install.sh" "$INSTALLER_EXTRAS/install.sh"
-
-    info "[installer] Copying mke2fs + shared libraries from rootfs"
-    MKE2FS_BIN="$(find "$ROOTFS_DIR/sbin" "$ROOTFS_DIR/usr/sbin" \
-                       "$ROOTFS_DIR/bin"  "$ROOTFS_DIR/usr/bin" \
-                       -name "mke2fs" 2>/dev/null | head -1)"
-    [ -n "$MKE2FS_BIN" ] || die "mke2fs not found in rootfs — add e2fsprogs to packages.list"
-
-    install -D "$MKE2FS_BIN" "$INSTALLER_EXTRAS${MKE2FS_BIN#$ROOTFS_DIR}"
-    # mkfs.ext4 is normally a symlink to mke2fs
-    ln -sf "$(basename "$MKE2FS_BIN")" \
-        "$INSTALLER_EXTRAS$(dirname "${MKE2FS_BIN#$ROOTFS_DIR}")/mkfs.ext4"
-
-    # Copy the shared libraries mke2fs needs (hardcoded for Debian amd64).
-    # Search by exact soname (no wildcard, no -type f) so that soname symlinks are
-    # found and install dereferences them — avoids copying versioned filenames that
-    # the dynamic linker won't resolve.
-    for libname in libext2fs.so.2 libe2p.so.2 libcom_err.so.2 libblkid.so.1 libuuid.so.1 libc.so.6; do
-        libpath="$(find "$ROOTFS_DIR/usr/lib" \
-                        -name "$libname" 2>/dev/null | head -1)"
-        if [ -n "$libpath" ]; then
-            install -D "$libpath" "$INSTALLER_EXTRAS${libpath#$ROOTFS_DIR}"
-            info "  lib: $libname"
-        else
-            info "  WARNING: $libname not found in rootfs"
-        fi
-    done
-    # Dynamic linker — on Debian Trixie /lib and /lib64 are symlinks to usr/lib[64],
-    # so search usr/ directly. The ELF interpreter path baked into binaries is
-    # /lib64/ld-linux-x86-64.so.2, so install it there regardless of source path.
-    LD_PATH="$(find "$ROOTFS_DIR/usr/lib" "$ROOTFS_DIR/usr/lib64" \
-                    -name "ld-linux-x86-64.so.2" -type f 2>/dev/null | head -1)"
-    if [ -n "$LD_PATH" ]; then
-        install -D "$LD_PATH" "$INSTALLER_EXTRAS/lib64/ld-linux-x86-64.so.2"
-        info "  ld: ld-linux-x86-64.so.2"
-    else
-        info "  WARNING: dynamic linker not found in rootfs"
-    fi
-
-    info "[installer] Copying openssl + libcrypto from rootfs (for password hashing)"
-    OPENSSL_BIN="$(find "$ROOTFS_DIR/usr/bin" "$ROOTFS_DIR/bin" \
-                        -name "openssl" -type f 2>/dev/null | head -1)"
-    [ -n "$OPENSSL_BIN" ] || die "openssl not found in rootfs — add openssl to packages.list"
-    install -D "$OPENSSL_BIN" "$INSTALLER_EXTRAS${OPENSSL_BIN#$ROOTFS_DIR}"
-    # libssl, libcrypto, libz, libzstd — full openssl passwd dependency set.
-    # Same soname-exact search as above.
-    for libname in libssl.so.3 libcrypto.so.3 libz.so.1 libzstd.so.1; do
-        libpath="$(find "$ROOTFS_DIR/usr/lib" \
-                        -name "$libname" 2>/dev/null | head -1)"
-        if [ -n "$libpath" ]; then
-            install -D "$libpath" "$INSTALLER_EXTRAS${libpath#$ROOTFS_DIR}"
-            info "  lib: $libname"
-        else
-            info "  WARNING: $libname not found in rootfs"
-        fi
-    done
-
-    info "[installer] Copying sfdisk + libraries from rootfs (for GPT partitioning)"
-    SFDISK_BIN="$(find "$ROOTFS_DIR/usr/sbin" "$ROOTFS_DIR/sbin" \
-                       -name "sfdisk" 2>/dev/null | head -1)"
-    [ -n "$SFDISK_BIN" ] || die "sfdisk not found in rootfs — add util-linux to packages.list"
-    install -D "$SFDISK_BIN" "$INSTALLER_EXTRAS${SFDISK_BIN#$ROOTFS_DIR}"
-    for libname in libfdisk.so.1 libsmartcols.so.1 libtinfo.so.6 libreadline.so.8; do
-        libpath="$(find "$ROOTFS_DIR/usr/lib" -name "$libname" 2>/dev/null | head -1)"
-        if [ -n "$libpath" ]; then
-            install -D "$libpath" "$INSTALLER_EXTRAS${libpath#$ROOTFS_DIR}"
-            info "  lib: $libname"
-        else
-            info "  WARNING: $libname not found in rootfs"
-        fi
-    done
-
-    info "[installer] Copying mkdosfs from rootfs (for FAT32 formatting)"
-    MKDOSFS_BIN="$(find "$ROOTFS_DIR/usr/sbin" "$ROOTFS_DIR/sbin" \
-                        -name "mkdosfs" 2>/dev/null | head -1)"
-    [ -n "$MKDOSFS_BIN" ] || die "mkdosfs not found in rootfs — add dosfstools to packages.list"
-    install -D "$MKDOSFS_BIN" "$INSTALLER_EXTRAS${MKDOSFS_BIN#$ROOTFS_DIR}"
-
-    # ── Bake the entire OS payload into the installer initramfs at /payload ──
-    # install.sh reads these straight from RAM and writes them to the target
-    # disk — so the installer never needs to find or mount the boot medium
-    # (works identically from optical, dd'd USB, or Ventoy).
-    info "[installer] Baking OS payload into initramfs at /payload"
-    PAYLOAD_DIR="$INSTALLER_EXTRAS/payload"
-    mkdir -p "$PAYLOAD_DIR/larch-os/loader/entries"
-
-    VMLINUZ="$(find_vmlinuz)"
-    [ -f "$VMLINUZ" ] || die "Kernel vmlinuz not found in rootfs/boot"
-    cp "$VMLINUZ"        "$PAYLOAD_DIR/vmlinuz"
-    cp "$INITRAMFS_FILE" "$PAYLOAD_DIR/larch-os/initramfs.img"
-
-    EFI_BIN="$(find_efi_bin)"
-    [ -f "$EFI_BIN" ] || die "systemd-boot EFI binary not found in rootfs"
-    cp "$EFI_BIN" "$PAYLOAD_DIR/larch-os/bootx64.efi"
-
-    cp "$SCRIPT_DIR/bootloader/loader.conf"        "$PAYLOAD_DIR/larch-os/loader/"
-    cp "$SCRIPT_DIR/bootloader/entries/larch.conf" "$PAYLOAD_DIR/larch-os/loader/entries/"
-
-    # Build the fat installer initramfs (install.sh + tools + the OS payload)
-    build_initramfs "$SCRIPT_DIR/initramfs/installer" "$INSTALLER_INITRAMFS_FILE" \
-                    "installer" "$INSTALLER_EXTRAS"
 }
 
 # ── Stage 8: assemble-iso ────────────────────────────────────────────────────
 run_stage 8 "assemble-iso — copy all files into ISO tree" && {
     info "Assembling ISO directory tree"
     rm -rf "$ISO_ROOT"
-    # ISO layout — pure installer carrier. The OS payload is baked inside
-    # /initramfs.img (the installer initramfs), so the disc only needs the
-    # kernel + installer initramfs that GRUB boots, plus GRUB's own config:
-    #   /vmlinuz        — kernel        (GRUB: linux /vmlinuz)
-    #   /initramfs.img  — installer     (GRUB: initrd /initramfs.img; embeds payload)
+    # ISO layout — pure boot carrier. The ISO boots the real OS initramfs (which
+    # embeds rootfs.squashfs); the GRUB cmdline routes it into installer mode.
+    #   /vmlinuz        — kernel             (GRUB: linux /vmlinuz)
+    #   /initramfs.img  — OS initramfs       (GRUB: initrd /initramfs.img; embeds squashfs)
     #   /boot/grub/     — GRUB internal config (path fixed by grub-mkrescue)
     mkdir -p "$ISO_ROOT/boot/grub"
 
@@ -503,8 +451,8 @@ run_stage 8 "assemble-iso — copy all files into ISO tree" && {
     [ -f "$VMLINUZ" ] || die "Kernel vmlinuz not found in rootfs/boot"
     info "Kernel: $VMLINUZ"
 
-    cp "$VMLINUZ"                  "$ISO_ROOT/vmlinuz"
-    cp "$INSTALLER_INITRAMFS_FILE" "$ISO_ROOT/initramfs.img"
+    cp "$VMLINUZ"        "$ISO_ROOT/vmlinuz"
+    cp "$INITRAMFS_FILE" "$ISO_ROOT/initramfs.img"
 
     info "ISO tree assembled at $ISO_ROOT"
     du -sh "$ISO_ROOT"
