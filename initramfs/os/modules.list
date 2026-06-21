@@ -3,6 +3,13 @@
 # Storage drivers are required to find and mount the LARCHOS FAT32 partition
 # so the init script can apply the user config (hostname, passwd, shadow, etc.)
 # on every boot.
+#
+# IMPORTANT: names here are matched against .ko FILENAMES (not modprobe aliases).
+# The build does find -name "${mod}.ko*" — an exact glob match. Many kernel modules
+# use hyphens in their filenames even though modprobe accepts underscores (it
+# normalises them). Use the hyphenated filename that matches the actual .ko file.
+# Wrong: nvme_core → finds nothing (file is nvme-core.ko)
+# Right: nvme-core → finds nvme-core.ko  ✓
 
 squashfs
 loop
@@ -33,24 +40,27 @@ ahci
 ata_piix
 
 # ── NVMe ──────────────────────────────────────────────────────────
+# nvme-core.ko and nvme-auth.ko use hyphens (not underscores).
+# nvme.ko depends on nvme-core.ko which depends on nvme-auth.ko.
+nvme-auth
+nvme-core
 nvme
-nvme_core
 
 # ── USB core (required by every USB driver: host controllers, storage, HID) ─
-# Loadable modules in Trixie (NOT built-in). The build copies only the modules
-# named here — it does not resolve modules.dep — so without these xhci_hcd /
-# usb_storage / usbhid all fail to load. Names match the .ko FILENAMES.
 usb-common
 usbcore
 
 # ── USB storage (thumb drives / external SATA adapters) ───────────
+# Host controller files all use hyphens: xhci-hcd.ko, xhci-pci.ko, etc.
+# ehci-pci.ko depends on ehci-hcd.ko, so both must be listed.
 sd_mod
-usb_storage
+usb-storage
 uas
-xhci_hcd
-xhci_pci
-ehci_pci
-uhci_hcd
+xhci-hcd
+xhci-pci
+ehci-hcd
+ehci-pci
+uhci-hcd
 
 # ── Input (emergency shell keyboard) ──────────────────────────────
 # USB keyboards need the HID stack; hid + hid-generic are loadable modules

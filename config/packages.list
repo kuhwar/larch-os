@@ -125,3 +125,9 @@ cpio
 
 # ── Firmware (broad coverage for common hardware) ────────────────────────────
 firmware-linux-free
+firmware-linux-nonfree
+firmware-iwlwifi
+firmware-realtek
+firmware-atheros
+firmware-brcm80211
+firmware-mediatek

@@ -124,7 +124,21 @@ mount -t overlay overlay \
 # This happens on every boot — the squashfs lower layer is never modified.
 
 log "Settling devices..."
-udevadm settle 2>/dev/null || sleep 2
+udevadm settle 2>/dev/null || true
+# Poll for storage partition nodes. NVMe (and some AHCI) controllers schedule
+# device creation asynchronously on a work queue — modprobe returns before the
+# /dev/ nodes exist. udevadm settle is a no-op without a running udevd, so we
+# poll explicitly instead of relying on a fixed sleep (which may or may not run
+# depending on settle's exit code).
+_w=0
+while [ "$_w" -lt 15 ]; do
+    for _blk in /dev/sd?[0-9] /dev/nvme?n?p[0-9] /dev/vd?[0-9] /dev/mmcblk?p[0-9]; do
+        [ -b "$_blk" ] && break 2
+    done
+    sleep 1
+    _w=$((_w+1))
+done
+unset _w _blk
 
 mkdir -p /mnt/config
 
