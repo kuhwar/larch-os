@@ -241,8 +241,14 @@ printf 'LABEL=LARCHHOME\t\t/home/%s\text4\tdefaults,relatime,nofail\t0\t2\n' \
 
 # ── Partition ─────────────────────────────────────────────────────────────────
 
+info "Unmounting any existing partitions on $TARGET_DISK"
+for _p in "${TARGET_DISK}"[0-9]* "${TARGET_DISK}"p[0-9]*; do
+    [ -b "$_p" ] && umount "$_p" 2>/dev/null || true
+done
+unset _p
+
 info "Creating GPT partition table on $TARGET_DISK"
-wipefs -a "$TARGET_DISK" 2>/dev/null || true
+wipefs -a "$TARGET_DISK"
 printf 'label: gpt\nsize=%s, type=uefi, name=LARCHOS\ntype=linux, name=LARCHHOME\n' \
     "$OS_PART_SIZE" | sfdisk -q "$TARGET_DISK"
 partprobe "$TARGET_DISK" 2>/dev/null || true
