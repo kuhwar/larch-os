@@ -1,0 +1,66 @@
+# Kernel modules for the installer initramfs.
+# Needed to mount the installer USB (iso9660), find and partition the target
+# disk, and accept keyboard input — all before switch_root.
+#
+# IMPORTANT: names here are matched against .ko FILENAMES (not modprobe aliases).
+# The build does find -name "${mod}.ko*" — an exact glob match. Many kernel modules
+# use hyphens in their filenames even though modprobe accepts underscores (it
+# normalises them). Use the hyphenated filename that matches the actual .ko file.
+
+# ── Filesystems ───────────────────────────────────────────────────────────────
+# isofs is the actual .ko filename; iso9660 is only a modprobe alias
+isofs
+loop
+fat
+vfat
+nls_utf8
+nls_cp437
+nls_ascii
+# ext4 deps must be listed explicitly so the build copies them into the initramfs
+crc16
+mbcache
+jbd2
+ext4
+# cdrom must precede sr_mod (sr_mod depends on it); sr_mod creates /dev/sr0
+cdrom
+sr_mod
+
+# ── VirtIO block (QEMU/KVM) ───────────────────────────────────────────────────
+virtio
+virtio_ring
+virtio_pci_legacy_dev
+virtio_pci_modern_dev
+virtio_pci
+virtio_blk
+virtio_scsi
+scsi_common
+scsi_mod
+
+# ── SATA / AHCI ───────────────────────────────────────────────────────────────
+libata
+libahci
+ahci
+ata_piix
+
+# ── NVMe ──────────────────────────────────────────────────────────────────────
+nvme-auth
+nvme-core
+nvme
+
+# ── USB (host controllers + storage) ──────────────────────────────────────────
+usb-common
+usbcore
+sd_mod
+usb-storage
+uas
+xhci-hcd
+xhci-pci
+ehci-hcd
+ehci-pci
+uhci-hcd
+
+# ── Input (keyboard) ──────────────────────────────────────────────────────────
+hid
+usbhid
+hid-generic
+evdev

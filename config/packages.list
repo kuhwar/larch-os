@@ -112,16 +112,15 @@ fonts-noto-color-emoji
 fonts-dejavu
 fonts-liberation
 
-# ── Installer dependencies ───────────────────────────────────────────────────
-# The installer runs in the booted live system (udev loads all drivers), so it
-# uses these real tools directly: sfdisk/lsblk/losetup/blkid (util-linux, base),
-# mkfs.fat (dosfstools), mkfs.ext4 (e2fsprogs), openssl, and cpio/gzip to wrap
-# the recovered squashfs into the target's OS initramfs at install time.
-gdisk
+# ── Installer build dependencies ─────────────────────────────────────────────
+# These packages are not used by the installed larch OS at runtime. They are
+# present so that stage 8 (build-installer) can copy their binaries and shared
+# libraries into the installer initramfs: mkfs.fat (dosfstools), mkfs.ext4
+# (e2fsprogs), sfdisk/wipefs/blockdev (util-linux — already in base above).
+# systemd-boot provides the BOOTX64.EFI binary placed on the ISO in stage 9.
 dosfstools
 e2fsprogs
 systemd-boot
-cpio
 
 # ── Firmware (broad coverage for common hardware) ────────────────────────────
 firmware-linux-free
