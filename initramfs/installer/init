@@ -1,0 +1,111 @@
+#!/bin/sh
+# larch-os installer initramfs init — PID 1
+#
+# Loads storage and filesystem modules, locates the installer USB medium
+# (ISO9660, label LARCHISO), mounts it at /mnt/iso, then runs
+# /usr/sbin/larch-install. All OS files to be installed live on the ISO
+# under /larch-os/; the installer reads them from there.
+#
+# No switch_root: the installer runs to completion from this initramfs,
+# then reboots. The larch OS runs only on the installed disk.
+set -e
+
+log()     { echo "[larch-install-init] $*" > /dev/console; }
+die()     { echo "[larch-install-init] FATAL: $*" > /dev/console; exec sh < /dev/console > /dev/console 2>&1; }
+load_mod() { modprobe "$1" 2>/dev/null && log "  [mod] $1" || log "  [mod] SKIP: $1"; }
+
+mount -t proc     proc     /proc
+mount -t sysfs    sysfs    /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || mdev -s
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts 2>/dev/null || true
+
+log "larch-os installer initramfs starting"
+
+# ── Load modules ──────────────────────────────────────────────────────────────
+
+load_mod isofs
+load_mod loop
+load_mod fat
+load_mod vfat
+load_mod nls_utf8
+load_mod nls_cp437
+load_mod nls_ascii
+load_mod crc16
+load_mod mbcache
+load_mod jbd2
+load_mod ext4
+load_mod cdrom
+load_mod sr_mod
+
+load_mod virtio
+load_mod virtio_ring
+load_mod virtio_pci_legacy_dev
+load_mod virtio_pci_modern_dev
+load_mod virtio_pci
+load_mod virtio_blk
+load_mod virtio_scsi
+load_mod scsi_common
+load_mod scsi_mod
+
+load_mod libata
+load_mod libahci
+load_mod ahci
+load_mod ata_piix
+
+load_mod nvme-auth
+load_mod nvme-core
+load_mod nvme
+
+load_mod usb-common
+load_mod usbcore
+load_mod sd_mod
+load_mod usb-storage
+load_mod uas
+load_mod xhci-hcd
+load_mod xhci-pci
+load_mod ehci-hcd
+load_mod ehci-pci
+load_mod uhci-hcd
+
+load_mod hid
+load_mod usbhid
+load_mod hid-generic
+load_mod evdev
+
+# ── Find installer USB medium ─────────────────────────────────────────────────
+
+log "Settling devices..."
+udevadm settle 2>/dev/null || sleep 3
+
+log "Searching for installer medium (LABEL=LARCHISO)..."
+ISO_DEV=""
+_w=0
+while [ -z "$ISO_DEV" ]; do
+    # Fast path: findfs by volume label
+    ISO_DEV="$(findfs LABEL=LARCHISO 2>/dev/null || true)"
+    # Fallback: scan block devices for iso9660 type
+    # /dev/sr? covers CD-ROM drives (QEMU -cdrom, real USB CD-ROMs)
+    if [ -z "$ISO_DEV" ]; then
+        for _d in $(ls /dev/sr? /dev/sd? /dev/vd? /dev/mmcblk? 2>/dev/null || true); do
+            [ -b "$_d" ] || continue
+            if [ "$(blkid -s TYPE -o value "$_d" 2>/dev/null)" = "iso9660" ]; then
+                ISO_DEV="$_d"; break
+            fi
+        done
+    fi
+    [ -n "$ISO_DEV" ] && break
+    _w=$((_w + 1))
+    [ "$_w" -gt 20 ] && die "Installer medium not found after 20 s — is the USB plugged in?"
+    sleep 1
+done
+unset _w _d
+
+log "Found installer medium: $ISO_DEV"
+mkdir -p /mnt/iso
+mount -r -t iso9660 "$ISO_DEV" /mnt/iso || die "Failed to mount installer medium at /mnt/iso"
+log "Mounted installer medium at /mnt/iso"
+
+# ── Run installer ─────────────────────────────────────────────────────────────
+
+exec /usr/sbin/larch-install
