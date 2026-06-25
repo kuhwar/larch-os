@@ -129,5 +129,8 @@ mount -r -t iso9660 "$ISO_DEV" /mnt/iso || die "Failed to mount installer medium
 log "Mounted installer medium at /mnt/iso"
 
 # ── Run installer ─────────────────────────────────────────────────────────────
+# setsid gives the installer its own session so it can open /dev/tty1 as a
+# controlling terminal. Without this, PID 1 has no ctty and read gets no
+# keyboard input on real hardware even though console output works fine.
 
-exec /usr/sbin/larch-install
+exec setsid sh -c 'exec /usr/sbin/larch-install < /dev/tty1 > /dev/tty1 2>&1'
