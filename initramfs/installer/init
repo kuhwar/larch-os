@@ -57,24 +57,19 @@ load_mod nvme-auth
 load_mod nvme-core
 load_mod nvme
 
-load_mod usb-common
-load_mod usbcore
-# Host controllers must load before any USB device class drivers so the bus is
-# live when storage/HID drivers register themselves. xHCI also needs a moment
-# to reset and re-enumerate devices that GRUB was using.
-load_mod xhci-hcd
-load_mod xhci-pci
-load_mod ehci-hcd
-load_mod ehci-pci
-load_mod uhci-hcd
-sleep 1
 load_mod sd_mod
-load_mod usb-storage
+load_mod usb_common
+load_mod usbcore
+load_mod usb_storage
 load_mod uas
+load_mod xhci_hcd
+load_mod xhci_pci
+load_mod ehci_pci
+load_mod uhci_hcd
 
 load_mod hid
 load_mod usbhid
-load_mod hid-generic
+load_mod hid_generic
 load_mod evdev
 
 # ── Find installer USB medium ─────────────────────────────────────────────────
