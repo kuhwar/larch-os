@@ -135,11 +135,50 @@ prompt_config
 
 # ── Pick target disk ──────────────────────────────────────────────────────────
 
+list_disks() {
+    # One device per line: full device path · total capacity · model/description.
+    _found=0
+    for _sys in /sys/block/*; do
+        _name=$(basename "$_sys")
+        case "$_name" in
+            loop*|sr*|ram*|fd*|dm-*|md*) continue ;;
+        esac
+        [ -b "/dev/$_name" ] || continue
+
+        # Total capacity in bytes (512-byte sectors), rendered human-readable.
+        _sectors=$(cat "$_sys/size" 2>/dev/null || echo 0)
+        _size=$(human_size $(( _sectors * 512 )))
+
+        # Device name/definition: vendor + model, falling back to model alone.
+        _vendor=$(cat "$_sys/device/vendor" 2>/dev/null || echo "")
+        _model=$(cat "$_sys/device/model" 2>/dev/null || echo "")
+        _desc=$(echo "$_vendor $_model" | sed 's/^ *//;s/ *$//;s/  */ /g')
+        [ -n "$_desc" ] || _desc="(unknown device)"
+
+        printf "  %-14s %10s   %s\n" "/dev/$_name" "$_size" "$_desc"
+        _found=1
+    done
+    [ "$_found" -eq 1 ] || echo "  (could not list disks)"
+}
+
+# Render a byte count as a human-readable capacity (GB/TB, base-10 like disks).
+human_size() {
+    _b="$1"
+    if [ "$_b" -ge 1000000000000 ]; then
+        printf '%d.%01d TB\n' "$(( _b / 1000000000000 ))" "$(( (_b % 1000000000000) / 100000000000 ))"
+    elif [ "$_b" -ge 1000000000 ]; then
+        printf '%d.%01d GB\n' "$(( _b / 1000000000 ))" "$(( (_b % 1000000000) / 100000000 ))"
+    elif [ "$_b" -ge 1000000 ]; then
+        printf '%d MB\n' "$(( _b / 1000000 ))"
+    else
+        printf '%d B\n' "$_b"
+    fi
+}
+
 nl
 if [ -z "$TARGET_DISK" ]; then
     echo "Available disks:"
-    lsblk -d -o NAME,SIZE,MODEL 2>/dev/null | grep -v "^loop" | grep -v "^sr" || \
-        ls /dev/sd? /dev/vd? /dev/nvme?n? 2>/dev/null || echo "  (could not list disks)"
+    list_disks
     nl
     printf "Target disk (e.g. /dev/sda): "
     read -r TARGET_DISK
