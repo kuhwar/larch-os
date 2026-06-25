@@ -172,7 +172,7 @@ mnt/iso,run,tmp}
     chmod +x "$build_dir/bin/busybox"
     for applet in sh ash cat cp echo grep ls mkdir mount modprobe \
                   mknod sleep switch_root umount uname blkid findfs find udevadm \
-                  sed awk cut tr head tail \
+                  sed awk cut tr head tail cttyhack \
                   chmod chown id stty sync lsblk reboot date stat; do
         ln -sf busybox "$build_dir/bin/$applet" 2>/dev/null || true
     done

@@ -144,4 +144,4 @@ done
 # controlling terminal. Without this, PID 1 has no ctty and read gets no
 # keyboard input on real hardware even though console output works fine.
 
-exec setsid sh -c 'exec /usr/sbin/larch-install < /dev/console > /dev/console 2>&1'
+exec setsid cttyhack sh /usr/sbin/larch-install
