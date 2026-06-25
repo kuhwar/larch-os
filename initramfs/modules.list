@@ -1,16 +1,18 @@
-# Kernel modules for the installer initramfs.
-# Needed to mount the installer USB (iso9660), find and partition the target
-# disk, and accept keyboard input — all before switch_root.
+# Shared kernel modules list for both the OS and installer initramfs.
 #
 # IMPORTANT: names here are matched against .ko FILENAMES (not modprobe aliases).
 # The build does find -name "${mod}.ko*" — an exact glob match. Many kernel modules
 # use hyphens in their filenames even though modprobe accepts underscores (it
 # normalises them). Use the hyphenated filename that matches the actual .ko file.
+# Wrong: nvme_core → finds nothing (file is nvme-core.ko)
+# Right: nvme-core → finds nvme-core.ko  ✓
 
 # ── Filesystems ───────────────────────────────────────────────────────────────
+squashfs
+loop
+overlay
 # isofs is the actual .ko filename; iso9660 is only a modprobe alias
 isofs
-loop
 fat
 vfat
 nls_utf8
@@ -43,11 +45,15 @@ ahci
 ata_piix
 
 # ── NVMe ──────────────────────────────────────────────────────────────────────
+# nvme-core.ko and nvme-auth.ko use hyphens (not underscores).
+# nvme.ko depends on nvme-core.ko which depends on nvme-auth.ko.
 nvme-auth
 nvme-core
 nvme
 
 # ── USB (host controllers + storage) ──────────────────────────────────────────
+# Host controller files all use hyphens: xhci-hcd.ko, xhci-pci.ko, etc.
+# ehci-pci.ko depends on ehci-hcd.ko, so both must be listed.
 usb-common
 usbcore
 sd_mod
@@ -60,6 +66,9 @@ ehci-pci
 uhci-hcd
 
 # ── Input (keyboard) ──────────────────────────────────────────────────────────
+# USB keyboards need the HID stack; hid + hid-generic are loadable modules
+# (not built-in). PS/2 keyboards work without these (i8042/atkbd are built-in).
+# NOTE: the file is hid-generic.ko (hyphen); "hid_generic" never matched it.
 hid
 usbhid
 hid-generic

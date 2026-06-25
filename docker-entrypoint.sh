@@ -192,7 +192,7 @@ mnt/iso,run,tmp}
             while IFS= read -r kofile; do
                 install -D "$kofile" "$build_dir${kofile#$ROOTFS_DIR}"
             done
-        done < "$src_dir/modules.list"
+        done < "$SCRIPT_DIR/initramfs/modules.list"
 
         for f in modules.dep modules.alias modules.softdep modules.builtin; do
             [ -f "$ROOTFS_DIR/lib/modules/$kver/$f" ] && \
