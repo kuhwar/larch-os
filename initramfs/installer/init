@@ -123,6 +123,22 @@ mkdir -p /mnt/iso
 mount -r -t iso9660 "$ISO_DEV" /mnt/iso || die "Failed to mount installer medium at /mnt/iso"
 log "Mounted installer medium at /mnt/iso"
 
+# ── Wait for keyboard ─────────────────────────────────────────────────────────
+# On real hardware xHCI does a BIOS handoff after loading (up to 5 s) before
+# USB devices enumerate. Poll /proc/bus/input/devices until a kbd handler
+# appears so the installer prompt isn't shown before the keyboard is ready.
+log "Waiting for keyboard..."
+_k=0
+while ! grep -q "kbd" /proc/bus/input/devices 2>/dev/null; do
+    _k=$((_k+1))
+    if [ "$_k" -gt 15 ]; then
+        log "WARNING: no keyboard detected after 15 s — continuing anyway"
+        break
+    fi
+    sleep 1
+done
+[ "$_k" -lt 15 ] && log "Keyboard ready (${_k}s)"
+
 # ── Run installer ─────────────────────────────────────────────────────────────
 # setsid gives the installer its own session so it can open /dev/tty1 as a
 # controlling terminal. Without this, PID 1 has no ctty and read gets no
