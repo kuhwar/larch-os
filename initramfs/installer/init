@@ -59,14 +59,18 @@ load_mod nvme
 
 load_mod usb-common
 load_mod usbcore
-load_mod sd_mod
-load_mod usb-storage
-load_mod uas
+# Host controllers must load before any USB device class drivers so the bus is
+# live when storage/HID drivers register themselves. xHCI also needs a moment
+# to reset and re-enumerate devices that GRUB was using.
 load_mod xhci-hcd
 load_mod xhci-pci
 load_mod ehci-hcd
 load_mod ehci-pci
 load_mod uhci-hcd
+sleep 1
+load_mod sd_mod
+load_mod usb-storage
+load_mod uas
 
 load_mod hid
 load_mod usbhid
@@ -82,8 +86,26 @@ log "Searching for installer medium (LABEL=LARCHISO)..."
 ISO_DEV=""
 _w=0
 while [ -z "$ISO_DEV" ]; do
-    # Fast path: findfs by volume label
+    # Fast path: findfs by volume label.
+    # When dd'd to USB the iso9660 spans the whole device (/dev/sdb), but
+    # findfs may return a partition (/dev/sdb3) because the GPT that
+    # grub-mkrescue embeds makes the kernel create partition entries.
+    # Strip the partition suffix to get the whole-disk device to mount.
     ISO_DEV="$(findfs LABEL=LARCHISO 2>/dev/null || true)"
+    if [ -n "$ISO_DEV" ]; then
+        # When dd'd to USB the iso9660 spans the whole device (/dev/sdb), but
+        # findfs may return a partition (/dev/sdb3) because grub-mkrescue embeds
+        # a GPT that makes the kernel create partition entries. Strip the suffix
+        # to get the parent device. Guard with -b so /dev/sr0 (CD, no parent)
+        # is left alone — stripping its digit gives /dev/sr which doesn't exist.
+        case "$ISO_DEV" in
+            *nvme*p[0-9]*) _parent="${ISO_DEV%p[0-9]*}" ;;
+            *[0-9])        _parent="$(echo "$ISO_DEV" | sed 's/[0-9]*$//')" ;;
+            *)             _parent="" ;;
+        esac
+        [ -n "$_parent" ] && [ -b "$_parent" ] && ISO_DEV="$_parent"
+        unset _parent
+    fi
     # Fallback: scan block devices for iso9660 type
     # /dev/sr? covers CD-ROM drives (QEMU -cdrom, real USB CD-ROMs)
     if [ -z "$ISO_DEV" ]; then
