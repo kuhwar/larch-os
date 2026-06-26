@@ -185,6 +185,16 @@ if [ -f "$CFG/hosts" ]; then
     cp "$CFG/hosts" /mnt/root/etc/hosts
 fi
 
+# /etc/machine-id — apply the installer-generated id so the machine keeps a
+# stable identity (DHCP lease/IP, DHCPv6 DUID, journal) across reboots. /etc is
+# tmpfs, so without this systemd would synthesise a new id on every boot.
+if [ -f "$CFG/machine-id" ]; then
+    mkdir -p /mnt/root/etc
+    cp "$CFG/machine-id" /mnt/root/etc/machine-id
+    chmod 444 /mnt/root/etc/machine-id
+    log "  machine-id: $(cat "$CFG/machine-id")"
+fi
+
 # Determine installed username (default: larch)
 USERNAME="larch"
 if [ -f "$CFG/username" ]; then

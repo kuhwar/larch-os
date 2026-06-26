@@ -309,27 +309,26 @@ build_installer_initramfs() {
         info "WARNING: ossl-modules directory not found in rootfs — openssl passwd may fail"
     fi
 
-    # dialog drives the installer's full-screen config form (ncurses). It is
-    # OPTIONAL: copy it only if present in the rootfs so a cached/stripped rootfs
-    # still builds — install.sh falls back to plain read/stty prompts without it.
-    if find "$ROOTFS_DIR/usr/bin" "$ROOTFS_DIR/bin" -name dialog 2>/dev/null | grep -q .; then
-        copy_bin_with_libs dialog "$build_dir"
-        # ncurses needs a terminfo entry for the active $TERM. Bundle the common
-        # console/VM terminal types; install.sh sets TERM=linux on the VT.
-        local ti_src="$ROOTFS_DIR/usr/share/terminfo"
-        if [ -d "$ti_src" ]; then
-            local _ent
-            for _ent in l/linux v/vt100 v/vt220 a/ansi x/xterm x/xterm-256color d/dumb; do
-                [ -f "$ti_src/$_ent" ] && \
-                    install -D "$ti_src/$_ent" "$build_dir/usr/share/terminfo/$_ent"
-            done
-            info "[installer] Bundled dialog + terminfo (full-screen installer form enabled)"
-        else
-            info "WARNING: terminfo not found in rootfs — installer falls back to text prompts"
-        fi
-    else
-        info "[installer] dialog not in rootfs — installer will use plain text prompts"
+    # dialog drives the installer's entire UI (ncurses) and is a REQUIRED
+    # component — install.sh has no text fallback and dies without it. Fail the
+    # build here rather than ship a broken installer. If this trips on a cached
+    # rootfs that predates `dialog` in packages.list, rebuild from stage 4.
+    if ! find "$ROOTFS_DIR/usr/bin" "$ROOTFS_DIR/bin" -name dialog 2>/dev/null | grep -q .; then
+        die "dialog not found in rootfs — it is required by the installer (it ships via config/packages.list; rebuild from stage 4)"
     fi
+    copy_bin_with_libs dialog "$build_dir"
+    # ncurses needs a terminfo entry for the active $TERM. Bundle the common
+    # console/VM terminal types; install.sh sets TERM=linux on the VT.
+    local ti_src="$ROOTFS_DIR/usr/share/terminfo"
+    [ -d "$ti_src" ] || die "terminfo not found in rootfs — required for the installer's dialog UI"
+    local _ent
+    for _ent in l/linux v/vt100 v/vt220 a/ansi x/xterm x/xterm-256color d/dumb; do
+        [ -f "$ti_src/$_ent" ] && \
+            install -D "$ti_src/$_ent" "$build_dir/usr/share/terminfo/$_ent"
+    done
+    [ -f "$build_dir/usr/share/terminfo/l/linux" ] \
+        || die "terminfo entry for TERM=linux not found in rootfs — required for the installer's dialog UI"
+    info "[installer] Bundled dialog + terminfo (full-screen installer UI)"
 
     # Pack as single gzip cpio (no squashfs — no two-pass needed)
     info "[installer] Packing installer initramfs → $INSTALLER_INITRAMFS_FILE"

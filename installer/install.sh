@@ -44,26 +44,21 @@ nl()   { echo ""; }
 clear_screen() { printf '\033[2J\033[3J\033[H'; }
 
 # ── Terminal UI (dialog) ──────────────────────────────────────────────────────
-# Prefer a full-screen `dialog` form when the binary and a usable terminfo entry
-# are present in the initramfs; otherwise fall back to the plain read/stty
-# prompts further down. The build bundles `dialog` only opportunistically (see
-# build_installer_initramfs), so HAVE_DIALOG=0 must remain a working path.
+# The installer UI is built entirely on `dialog` (ncurses) — it is a hard
+# dependency. The build bundles it into the installer initramfs (stage 8) and
+# fails if it is missing, so the binary is always present here. We still verify
+# it can initialise the terminal (terminfo for the active $TERM) before drawing
+# anything, so a terminal problem dies cleanly instead of mid-form.
 
 export TERM="${TERM:-linux}"
 export TERMINFO="${TERMINFO:-/usr/share/terminfo}"
 DIALOG_BT="larch-os installer"
 DIALOG_TMP="/run/larch-dialog.out"
-HAVE_DIALOG=0
-if command -v dialog >/dev/null 2>&1 && dialog --print-maxsize >/dev/null 2>&1; then
-    HAVE_DIALOG=1
-fi
 
-confirm() {
-    [ "$AUTO_YES" -eq 1 ] && return 0
-    printf "%s [y/N] " "$*"
-    read -r ans
-    case "$ans" in [yY]) return 0 ;; *) return 1 ;; esac
-}
+command -v dialog >/dev/null 2>&1 \
+    || die "dialog not found in installer initramfs (it is a required component)"
+dialog --print-maxsize >/dev/null 2>&1 \
+    || die "dialog cannot initialise the terminal (TERM=$TERM, TERMINFO=$TERMINFO)"
 
 cleanup() {
     umount "$MOUNT_OS"   2>/dev/null || true
@@ -100,60 +95,6 @@ done
 [ -d "$ISO_MOUNT/loader" ]                   || die "Bootloader config not found on installer medium"
 
 # ── Prompt for system configuration ──────────────────────────────────────────
-
-prompt_config() {
-    nl
-    echo "╔══════════════════════════════════════════════╗"
-    echo "  larch-os — System Configuration"
-    echo "╚══════════════════════════════════════════════╝"
-    nl
-
-    while true; do
-        printf "Hostname: "
-        read -r LARCH_HOSTNAME
-        case "$LARCH_HOSTNAME" in
-            ""|"-"*|*"-")
-                echo "  Invalid: cannot be empty or start/end with a hyphen" ;;
-            *[!a-zA-Z0-9-]*)
-                echo "  Invalid: only letters, numbers, and hyphens allowed" ;;
-            *) break ;;
-        esac
-    done
-
-    while true; do
-        printf "Username: "
-        read -r LARCH_USERNAME
-        case "$LARCH_USERNAME" in
-            "")
-                echo "  Invalid: cannot be empty" ;;
-            *[!a-z0-9_-]*)
-                echo "  Invalid: only lowercase letters, numbers, underscores, hyphens" ;;
-            *) break ;;
-        esac
-    done
-
-    while true; do
-        printf "Password for %s: " "$LARCH_USERNAME"
-        stty -echo 2>/dev/null || true
-        read -r LARCH_PASSWORD
-        stty echo  2>/dev/null || true
-        nl
-
-        printf "Confirm password: "
-        stty -echo 2>/dev/null || true
-        read -r _pw2
-        stty echo  2>/dev/null || true
-        nl
-
-        if [ -z "$LARCH_PASSWORD" ]; then
-            echo "  Password cannot be empty"
-        elif [ "$LARCH_PASSWORD" != "$_pw2" ]; then
-            echo "  Passwords do not match — try again"
-        else
-            break
-        fi
-    done
-}
 
 # Validate the collected fields. Emits a one-line, \Z1-coloured error to stdout
 # and returns non-zero when invalid; returns 0 (no output) when everything is OK.
@@ -207,39 +148,9 @@ form_config() {
     done
 }
 
-if [ "$HAVE_DIALOG" -eq 1 ]; then
-    form_config
-else
-    prompt_config
-fi
+form_config
 
 # ── Pick target disk ──────────────────────────────────────────────────────────
-
-list_disks() {
-    # One device per line: full device path · total capacity · model/description.
-    _found=0
-    for _sys in /sys/block/*; do
-        _name=$(basename "$_sys")
-        case "$_name" in
-            loop*|sr*|ram*|fd*|dm-*|md*) continue ;;
-        esac
-        [ -b "/dev/$_name" ] || continue
-
-        # Total capacity in bytes (512-byte sectors), rendered human-readable.
-        _sectors=$(cat "$_sys/size" 2>/dev/null || echo 0)
-        _size=$(human_size $(( _sectors * 512 )))
-
-        # Device name/definition: vendor + model, falling back to model alone.
-        _vendor=$(cat "$_sys/device/vendor" 2>/dev/null || echo "")
-        _model=$(cat "$_sys/device/model" 2>/dev/null || echo "")
-        _desc=$(echo "$_vendor $_model" | sed 's/^ *//;s/ *$//;s/  */ /g')
-        [ -n "$_desc" ] || _desc="(unknown device)"
-
-        printf "  %-14s %10s   %s\n" "/dev/$_name" "$_size" "$_desc"
-        _found=1
-    done
-    [ "$_found" -eq 1 ] || echo "  (could not list disks)"
-}
 
 # Render a byte count as a human-readable capacity (GB/TB, base-10 like disks).
 human_size() {
@@ -281,18 +192,7 @@ pick_disk_dialog() {
     TARGET_DISK=$(cat "$DIALOG_TMP")
 }
 
-if [ -z "$TARGET_DISK" ]; then
-    if [ "$HAVE_DIALOG" -eq 1 ]; then
-        pick_disk_dialog
-    else
-        nl
-        echo "Available disks:"
-        list_disks
-        nl
-        printf "Target disk (e.g. /dev/sda): "
-        read -r TARGET_DISK
-    fi
-fi
+[ -n "$TARGET_DISK" ] || pick_disk_dialog
 
 [ -b "$TARGET_DISK" ] || die "Not a block device: $TARGET_DISK"
 
@@ -303,9 +203,7 @@ esac
 
 # ── Confirm ───────────────────────────────────────────────────────────────────
 
-if [ "$AUTO_YES" -eq 1 ]; then
-    :   # non-interactive: caller already authorised the wipe with --yes
-elif [ "$HAVE_DIALOG" -eq 1 ]; then
+if [ "$AUTO_YES" -ne 1 ]; then
     dialog --colors --defaultno --yes-label "Install" --no-label "Cancel" \
         --backtitle "$DIALOG_BT" --title " Confirm Installation " \
         --yesno "\
@@ -319,21 +217,6 @@ elif [ "$HAVE_DIALOG" -eq 1 ]; then
         15 66 \
         || { clear_screen; echo "Aborted."; exit 0; }
     clear_screen
-else
-    nl
-    echo "╔══════════════════════════════════════════════╗"
-    echo "  larch-os installer — summary"
-    echo "╠══════════════════════════════════════════════╣"
-    printf "  Hostname      : %s\n" "$LARCH_HOSTNAME"
-    printf "  Username      : %s\n" "$LARCH_USERNAME"
-    printf "  Target disk   : %s\n" "$TARGET_DISK"
-    printf "  OS partition  : %s  (FAT32, %s, label LARCHOS)\n" "$PART1" "$OS_PART_SIZE"
-    printf "  Home partition: %s  (ext4,  rest of disk)\n" "$PART2"
-    echo ""
-    echo "  WARNING: ALL DATA ON $TARGET_DISK WILL BE DESTROYED."
-    echo "╚══════════════════════════════════════════════╝"
-    nl
-    confirm "Proceed with installation?" || { echo "Aborted."; exit 0; }
 fi
 
 # ── Generate config files ─────────────────────────────────────────────────────
@@ -365,10 +248,23 @@ chmod 600 "$CONFIG_TMP/shadow"
 
 printf '%s\n' "$LARCH_USERNAME" > "$CONFIG_TMP/username"
 
+# machine-id — generated once at install so the machine keeps a stable identity
+# (DHCP lease/IP, DHCPv6 DUID, systemd journal) across reboots. /etc is tmpfs on
+# the installed system, so without a persisted value systemd would synthesise a
+# fresh id every boot. The OS init re-applies this into /etc/machine-id.
+# Format: 32 lowercase hex digits + newline (sourced from the kernel UUID pool).
+tr -d '-' < /proc/sys/kernel/random/uuid > "$CONFIG_TMP/machine-id"
+
 printf '# /etc/fstab — larch-os (generated by installer)\n'                    > "$CONFIG_TMP/fstab"
 printf 'tmpfs\t\t\t/tmp\t\ttmpfs\tdefaults,nosuid,nodev\t\t0\t0\n'           >> "$CONFIG_TMP/fstab"
 printf 'tmpfs\t\t\t/run\t\ttmpfs\tdefaults,nosuid,nodev\t\t0\t0\n'           >> "$CONFIG_TMP/fstab"
 printf 'LABEL=LARCHHOME\t\t/home/%s\text4\tdefaults,relatime,nofail\t0\t2\n' \
+    "$LARCH_USERNAME"                                                          >> "$CONFIG_TMP/fstab"
+# Persist NetworkManager system connections (WiFi etc.) on the home partition.
+# Bind a root-owned dir under the user's home over NM's keyfile store. The
+# fstab generator orders this after the /home mount; NetworkManager.service
+# waits for it via a RequiresMountsFor drop-in shipped in the rootfs overlay.
+printf '/home/%s/.larch/nm-system-connections\t/etc/NetworkManager/system-connections\tnone\tbind,nofail\t0\t0\n' \
     "$LARCH_USERNAME"                                                          >> "$CONFIG_TMP/fstab"
 
 # ── Partition ─────────────────────────────────────────────────────────────────
@@ -421,7 +317,8 @@ cp "$CONFIG_TMP/hostname" "$DEST/hostname"
 cp "$CONFIG_TMP/hosts"    "$DEST/hosts"
 cp "$CONFIG_TMP/passwd"   "$DEST/passwd"
 cp "$CONFIG_TMP/shadow"   "$DEST/shadow"
-cp "$CONFIG_TMP/username" "$DEST/username"
+cp "$CONFIG_TMP/username"   "$DEST/username"
+cp "$CONFIG_TMP/machine-id" "$DEST/machine-id"
 cp "$CONFIG_TMP/fstab"    "$DEST/fstab"
 chmod 640 "$DEST/shadow"
 
@@ -443,6 +340,15 @@ chown -R 1000:1000 "$MOUNT_HOME"
 chown 0:0 "$MOUNT_HOME/lost+found" 2>/dev/null || true
 chmod 0750 "$MOUNT_HOME"
 
+# Persistent, root-owned store for NetworkManager system connections. This is
+# the bind-mount source for /etc/NetworkManager/system-connections (see fstab).
+# Root-owned 0700 so WiFi secrets stay unreadable/undeletable by the user even
+# though they live under the user's home (the only persistent partition).
+mkdir -p "$MOUNT_HOME/.larch/nm-system-connections"
+chown 0:0 "$MOUNT_HOME/.larch" "$MOUNT_HOME/.larch/nm-system-connections"
+chmod 0755 "$MOUNT_HOME/.larch"
+chmod 0700 "$MOUNT_HOME/.larch/nm-system-connections"
+
 sync
 umount "$MOUNT_HOME"
 
@@ -450,9 +356,8 @@ trap - EXIT
 
 # ── Done ─────────────────────────────────────────────────────────────────────
 
-if [ "$HAVE_DIALOG" -eq 1 ]; then
-    dialog --backtitle "$DIALOG_BT" --title " Installation Complete " \
-        --msgbox "\
+dialog --backtitle "$DIALOG_BT" --title " Installation Complete " \
+    --msgbox "\
   larch-os has been installed successfully.
 
   Hostname : $LARCH_HOSTNAME
@@ -461,21 +366,7 @@ if [ "$HAVE_DIALOG" -eq 1 ]; then
   Home     : $PART2  (LARCHHOME)
 
   Remove the installation media, then choose OK to reboot." \
-        15 60
-    clear_screen
-else
-    nl
-    echo "╔══════════════════════════════════════════════╗"
-    echo "  Installation complete!"
-    echo ""
-    printf "  Hostname : %s\n" "$LARCH_HOSTNAME"
-    printf "  User     : %s\n" "$LARCH_USERNAME"
-    printf "  OS       : %s  (LARCHOS)\n"   "$PART1"
-    printf "  Home     : %s  (LARCHHOME)\n" "$PART2"
-    echo ""
-    echo "  Remove the installation media, then press Enter to reboot."
-    echo "╚══════════════════════════════════════════════╝"
-    read -r _
-fi
+    15 60
+clear_screen
 umount /mnt/iso 2>/dev/null || true
 reboot

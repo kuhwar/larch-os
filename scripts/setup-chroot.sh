@@ -8,10 +8,14 @@ set -euo pipefail
 log() { echo "  [chroot] $*"; }
 
 # ── Locale & timezone ────────────────────────────────────────────────────────
+# Only WRITE the locale config here. The locale is compiled later, after the
+# `locales` package is installed — running locale-gen now (before `locales`
+# ships /usr/share/i18n) silently produces nothing, leaving only glibc's
+# built-in C.utf8 and breaking UTF-8 apps like gnome-terminal (VTE).
 log "Configuring locale and timezone"
 echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
-locale-gen
-echo "LANG=en_US.UTF-8" > /etc/locale.conf
+echo "LANG=en_US.UTF-8" > /etc/locale.conf      # systemd system locale
+echo "LANG=en_US.UTF-8" > /etc/default/locale   # Debian/PAM session locale
 ln -sf /usr/share/zoneinfo/UTC /etc/localtime
 
 # ── Hostname & hosts ─────────────────────────────────────────────────────────
@@ -39,6 +43,16 @@ log "Installing packages (this takes a while)"
 PKGS=$(grep -v '^#' /packages.list | grep -v '^[[:space:]]*$' | tr '\n' ' ')
 # shellcheck disable=SC2086
 apt-get install -y --no-install-recommends $PKGS
+
+# ── Generate locale (now that `locales` + /usr/share/i18n are installed) ───────
+# Must run AFTER package install. The compiled archive lands in /usr/lib/locale
+# and survives clean-rootfs (which only strips /usr/share/i18n source data).
+log "Generating en_US.UTF-8 locale"
+locale-gen en_US.UTF-8
+# Fail the build loudly if the archive didn't materialise — a missing en_US
+# locale silently breaks gnome-terminal (status=9, "Locale not supported").
+LC_ALL=en_US.UTF-8 locale >/dev/null 2>&1 \
+    || { echo "ERROR: en_US.UTF-8 was not generated" >&2; exit 1; }
 
 # ── User setup ───────────────────────────────────────────────────────────────
 log "Creating default user 'larch'"
