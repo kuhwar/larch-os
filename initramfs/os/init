@@ -1,17 +1,18 @@
 #!/bin/sh
 # larch-os OS initramfs init — PID 1
 #
-# rootfs.squashfs is embedded in this initramfs cpio. The kernel extracts it
-# into the initramfs tmpfs at boot — it is already in memory, no disk access needed
-# for the OS root.
+# Finds the LARCHOS FAT32 partition, loop-mounts rootfs.squashfs from it,
+# builds an overlayfs on top, applies per-machine config from the same
+# partition, then switch_roots to systemd.
 #
-# After building the overlayfs the init script finds the LARCHOS FAT32 partition
-# (label=LARCHOS) and applies the user config from the installer:
-#   hostname · hosts · passwd (UID 1000) · shadow · group (username)
+# LARCHOS stays mounted after switch_root: the squashfs loop device holds a
+# file reference to rootfs.squashfs on that filesystem and prevents unmounting.
+# It becomes a detached mount — invisible from the new root's filesystem tree
+# but alive in the kernel's mount table.
 #
 # Sequence:
-#   load modules → loop-mount /rootfs.squashfs → overlayfs →
-#   settle devices → mount LARCHOS → apply config → switch_root
+#   load modules → settle devices → mount LARCHOS → loop-mount squashfs →
+#   overlayfs → apply config → switch_root
 set -e
 
 # LOG_SINK starts at the console so anything failing before quiet-detection is
@@ -97,31 +98,10 @@ load_mod usbhid
 load_mod hid_generic
 load_mod evdev
 
-# ── Loop-mount embedded squashfs ──────────────────────────────────────────────
-# /rootfs.squashfs was extracted from the initramfs cpio by the kernel into the
-# initramfs tmpfs — it lives in RAM, no disk access required.
-
-[ -f /rootfs.squashfs ] || die "/rootfs.squashfs not found in initramfs"
-log "squashfs: $(du -sh /rootfs.squashfs 2>/dev/null | cut -f1)"
-
-mkdir -p /mnt/squashfs
-mount -r -t squashfs -o loop /rootfs.squashfs /mnt/squashfs || \
-    die "Failed to loop-mount squashfs"
-
-# ── OverlayFS (tmpfs upper layer) ─────────────────────────────────────────────
-
-mkdir -p /mnt/overlay /mnt/root
-mount -t tmpfs tmpfs /mnt/overlay || die "Failed to mount overlay tmpfs"
-mkdir -p /mnt/overlay/upper /mnt/overlay/work
-mount -t overlay overlay \
-    -o lowerdir=/mnt/squashfs,upperdir=/mnt/overlay/upper,workdir=/mnt/overlay/work \
-    /mnt/root || die "Failed to mount overlayfs"
-
-# ── Apply installer config from LARCHOS partition ─────────────────────────────
-# The installer writes config files to /larch-os/ on the LARCHOS FAT32 partition.
-# We read them here and write them into the overlayfs upper (tmpfs) layer so the
-# running system sees the correct hostname, user credentials, etc.
-# This happens on every boot — the squashfs lower layer is never modified.
+# ── Find LARCHOS partition ────────────────────────────────────────────────────
+# LARCHOS is the FAT32 boot/system partition written by the installer.
+# It holds rootfs.squashfs and the per-machine config files.
+# Retry for up to 20 s to handle USB drives that enumerate slowly.
 
 log "Settling devices..."
 udevadm settle 2>/dev/null || true
@@ -133,7 +113,7 @@ try_config_dev() {
     _d="$1"
     [ -b "$_d" ] || return 1
     mount -r -t vfat -o noatime "$_d" /mnt/config 2>/dev/null || return 1
-    if [ -e /mnt/config/larch-os/passwd ] || [ -e /mnt/config/larch-os/hostname ]; then
+    if [ -e /mnt/config/larch-os/rootfs.squashfs ]; then
         LARCHOS_DEV="$_d"
         return 0
     fi
@@ -141,118 +121,124 @@ try_config_dev() {
     return 1
 }
 
-# Locate the LARCHOS config partition.
+_w=0
+while [ -z "$LARCHOS_DEV" ]; do
+    # findfs fast path on first pass (silent if the busybox applet is absent)
+    if [ "$_w" -eq 0 ]; then
+        _cand="$(findfs LABEL=LARCHOS 2>/dev/null || true)"
+        [ -n "$_cand" ] && try_config_dev "$_cand"
+    fi
+    # Full partition scan — catches devices findfs missed or that appeared late
+    if [ -z "$LARCHOS_DEV" ]; then
+        for _d in $(ls /dev/vd*[0-9] /dev/sd*[0-9] /dev/nvme*p[0-9]* /dev/mmcblk*p[0-9]* 2>/dev/null || true); do
+            try_config_dev "$_d" && break
+        done
+    fi
+    [ -n "$LARCHOS_DEV" ] && break
+    _w=$((_w+1))
+    [ "$_w" -gt 20 ] && die "LARCHOS partition not found after 20s — cannot boot"
+    sleep 1
+done
+unset _w _cand
+log "Found LARCHOS on $LARCHOS_DEV"
+
+# ── Loop-mount squashfs from LARCHOS ─────────────────────────────────────────
+
+SQUASHFS="/mnt/config/larch-os/rootfs.squashfs"
+log "squashfs: $(du -sh "$SQUASHFS" 2>/dev/null | cut -f1)"
+
+mkdir -p /mnt/squashfs
+mount -r -t squashfs -o loop "$SQUASHFS" /mnt/squashfs || \
+    die "Failed to loop-mount squashfs"
+
+# ── OverlayFS (tmpfs upper layer) ─────────────────────────────────────────────
+
+mkdir -p /mnt/overlay /mnt/root
+mount -t tmpfs tmpfs /mnt/overlay || die "Failed to mount overlay tmpfs"
+mkdir -p /mnt/overlay/upper /mnt/overlay/work
+mount -t overlay overlay \
+    -o lowerdir=/mnt/squashfs,upperdir=/mnt/overlay/upper,workdir=/mnt/overlay/work \
+    /mnt/root || die "Failed to mount overlayfs"
+
+# ── Apply installer config from LARCHOS ──────────────────────────────────────
+# Read config files from /larch-os/ on LARCHOS and write them into the overlayfs
+# upper (tmpfs) layer so the running system sees the correct hostname, user
+# credentials, etc. This happens on every boot — the squashfs lower layer is
+# never modified.
 #
-# Live (installer) mode: the cmdline carries `larch.installer`.  Skip the scan
-# entirely — the installer boots with squashfs defaults regardless of whether a
-# previous installation exists on a connected disk.  Applying a prior install's
-# fstab would cause systemd to mount LARCHHOME, leaving the disk busy when the
-# installer later tries to wipe and reformat it.
-#
-# Installed mode: LARCHOS may be on a USB drive that enumerates slowly when a
-# faster internal disk (NVMe/AHCI) is also present.  The old single-scan
-# approach would miss it.  Retry every second for up to 20 s so USB drives have
-# time to appear after their host-controller driver loads.
-if grep -qw larch.installer /proc/cmdline 2>/dev/null; then
-    log "Live/installer mode — skipping LARCHOS config scan"
-else
-    _w=0
-    while [ -z "$LARCHOS_DEV" ]; do
-        # findfs fast path on first pass (silent if the busybox applet is absent)
-        if [ "$_w" -eq 0 ]; then
-            _cand="$(findfs LABEL=LARCHOS 2>/dev/null || true)"
-            [ -n "$_cand" ] && try_config_dev "$_cand"
-        fi
-        # Full partition scan — catches devices findfs missed or that appeared late
-        if [ -z "$LARCHOS_DEV" ]; then
-            for _d in $(ls /dev/vd*[0-9] /dev/sd*[0-9] /dev/nvme*p[0-9]* /dev/mmcblk*p[0-9]* 2>/dev/null || true); do
-                try_config_dev "$_d" && break
-            done
-        fi
-        [ -n "$LARCHOS_DEV" ] && break
-        _w=$((_w+1))
-        [ "$_w" -gt 20 ] && break
-        sleep 1
-    done
-    unset _w _cand
+# LARCHOS is NOT unmounted here: the squashfs loop device holds an open file
+# reference to rootfs.squashfs on that filesystem.
+
+log "Applying config from $LARCHOS_DEV"
+CFG="/mnt/config/larch-os"
+
+# hostname
+if [ -f "$CFG/hostname" ]; then
+    mkdir -p /mnt/root/etc
+    cp "$CFG/hostname" /mnt/root/etc/hostname
+    log "  hostname: $(cat "$CFG/hostname")"
 fi
 
-if [ -b "$LARCHOS_DEV" ]; then
-    log "Applying config from $LARCHOS_DEV"
-    CFG="/mnt/config/larch-os"
-
-    # hostname
-    if [ -f "$CFG/hostname" ]; then
-        mkdir -p /mnt/root/etc
-        cp "$CFG/hostname" /mnt/root/etc/hostname
-        log "  hostname: $(cat "$CFG/hostname")"
-    fi
-
-    # /etc/hosts
-    if [ -f "$CFG/hosts" ]; then
-        mkdir -p /mnt/root/etc
-        cp "$CFG/hosts" /mnt/root/etc/hosts
-    fi
-
-    # Determine installed username (default: larch)
-    USERNAME="larch"
-    if [ -f "$CFG/username" ]; then
-        USERNAME="$(cat "$CFG/username")"
-    fi
-    log "  username: $USERNAME"
-
-    # /etc/passwd — replace any UID-1000 line from the squashfs default with the
-    # installer-supplied entry (which has the correct username).
-    if [ -f "$CFG/passwd" ]; then
-        mkdir -p /mnt/root/etc
-        grep -v '^[^:]*:[^:]*:1000:' /mnt/squashfs/etc/passwd > /mnt/root/etc/passwd || true
-        cat "$CFG/passwd" >> /mnt/root/etc/passwd
-    fi
-
-    # /etc/shadow — remove any default "larch" line and the installer username line,
-    # then append the hashed entry from the installer.
-    if [ -f "$CFG/shadow" ]; then
-        mkdir -p /mnt/root/etc
-        grep -v "^larch:\|^${USERNAME}:" /mnt/squashfs/etc/shadow > /mnt/root/etc/shadow || true
-        cat "$CFG/shadow" >> /mnt/root/etc/shadow
-        chmod 640 /mnt/root/etc/shadow
-    fi
-
-    # /etc/group — rename the default "larch" user entries to the installed username.
-    if [ "$USERNAME" != "larch" ]; then
-        mkdir -p /mnt/root/etc
-        sed "s/\blarch\b/$USERNAME/g" /mnt/squashfs/etc/group > /mnt/root/etc/group || true
-        # Hide the build-time default user's home (/home/larch from the squashfs).
-        # rm against the overlay mount records a whiteout in the tmpfs upper layer;
-        # the read-only squashfs lower layer is untouched. Live mode keeps /home/larch.
-        rm -rf "/mnt/root/home/larch" 2>/dev/null || true
-    fi
-
-    # /etc/fstab — mounts LARCHHOME at /home/<username>
-    # The installer generates a fstab with a username-specific mount point.
-    # We also create the mount point directory and mask the generic home.mount
-    # unit (which mounts at /home) so systemd-fstab-generator takes over.
-    if [ -f "$CFG/fstab" ]; then
-        mkdir -p /mnt/root/etc
-        cp "$CFG/fstab" /mnt/root/etc/fstab
-        # Create the mount point so systemd doesn't have to
-        mkdir -p "/mnt/root/home/$USERNAME"
-        chown 1000:1000 "/mnt/root/home/$USERNAME" 2>/dev/null || true
-        chmod 0750      "/mnt/root/home/$USERNAME"  2>/dev/null || true
-        # Mask home.mount — the fstab entry for /home/<username> replaces it
-        mkdir -p /mnt/root/etc/systemd/system
-        ln -sf /dev/null /mnt/root/etc/systemd/system/home.mount
-        log "  fstab: LARCHHOME → /home/$USERNAME"
-    fi
-
-    umount /mnt/config
-    log "Config applied"
-else
-    log "LARCHOS not found — booting with squashfs defaults (live mode)"
+# /etc/hosts
+if [ -f "$CFG/hosts" ]; then
+    mkdir -p /mnt/root/etc
+    cp "$CFG/hosts" /mnt/root/etc/hosts
 fi
+
+# Determine installed username (default: larch)
+USERNAME="larch"
+if [ -f "$CFG/username" ]; then
+    USERNAME="$(cat "$CFG/username")"
+fi
+log "  username: $USERNAME"
+
+# /etc/passwd — replace any UID-1000 line from the squashfs default with the
+# installer-supplied entry (which has the correct username).
+if [ -f "$CFG/passwd" ]; then
+    mkdir -p /mnt/root/etc
+    grep -v '^[^:]*:[^:]*:1000:' /mnt/squashfs/etc/passwd > /mnt/root/etc/passwd || true
+    cat "$CFG/passwd" >> /mnt/root/etc/passwd
+fi
+
+# /etc/shadow — remove any default "larch" line and the installer username line,
+# then append the hashed entry from the installer.
+if [ -f "$CFG/shadow" ]; then
+    mkdir -p /mnt/root/etc
+    grep -v "^larch:\|^${USERNAME}:" /mnt/squashfs/etc/shadow > /mnt/root/etc/shadow || true
+    cat "$CFG/shadow" >> /mnt/root/etc/shadow
+    chmod 640 /mnt/root/etc/shadow
+fi
+
+# /etc/group — rename the default "larch" user entries to the installed username.
+if [ "$USERNAME" != "larch" ]; then
+    mkdir -p /mnt/root/etc
+    sed "s/\blarch\b/$USERNAME/g" /mnt/squashfs/etc/group > /mnt/root/etc/group || true
+    # Hide the build-time default user's home (/home/larch from the squashfs).
+    # rm against the overlay mount records a whiteout in the tmpfs upper layer;
+    # the read-only squashfs lower layer is untouched.
+    rm -rf "/mnt/root/home/larch" 2>/dev/null || true
+fi
+
+# /etc/fstab — mounts LARCHHOME at /home/<username>
+# The installer generates a fstab with a username-specific mount point.
+# We also create the mount point directory and mask the generic home.mount
+# unit (which mounts at /home) so systemd-fstab-generator takes over.
+if [ -f "$CFG/fstab" ]; then
+    mkdir -p /mnt/root/etc
+    cp "$CFG/fstab" /mnt/root/etc/fstab
+    # Create the mount point so systemd doesn't have to
+    mkdir -p "/mnt/root/home/$USERNAME"
+    chown 1000:1000 "/mnt/root/home/$USERNAME" 2>/dev/null || true
+    chmod 0750      "/mnt/root/home/$USERNAME"  2>/dev/null || true
+    # Mask home.mount — the fstab entry for /home/<username> replaces it
+    mkdir -p /mnt/root/etc/systemd/system
+    ln -sf /dev/null /mnt/root/etc/systemd/system/home.mount
+    log "  fstab: LARCHHOME → /home/$USERNAME"
+fi
+
+log "Config applied"
 
 # /home (LABEL=LARCHHOME) is mounted by systemd via home.mount after switch_root.
-# On live/ISO systems the nofail flag means systemd skips it gracefully.
 
 # ── Move pseudo-filesystems and switch root ───────────────────────────────────
 

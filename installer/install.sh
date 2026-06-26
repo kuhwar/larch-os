@@ -4,10 +4,11 @@
 # Runs as PID 1's child in the installer initramfs (see initramfs/installer/init).
 # The init mounts the installer USB at /mnt/iso before calling this script, so all
 # OS files to be installed are available there:
-#   /mnt/iso/larch-os/initramfs.img  — larch OS (squashfs embedded)
-#   /mnt/iso/larch-os/vmlinuz        — kernel
-#   /mnt/iso/EFI/BOOT/BOOTX64.EFI   — systemd-boot
-#   /mnt/iso/loader/                 — bootloader config
+#   /mnt/iso/larch-os/initramfs.img    — larch OS initramfs (base, no squashfs)
+#   /mnt/iso/larch-os/rootfs.squashfs  — OS root filesystem (separate from initramfs)
+#   /mnt/iso/larch-os/vmlinuz          — kernel
+#   /mnt/iso/EFI/BOOT/BOOTX64.EFI     — systemd-boot
+#   /mnt/iso/loader/                   — bootloader config
 #
 # Asks for:  hostname · username · password · target disk
 # Writes to LARCHOS:  vmlinuz · initramfs.img · bootloader · per-machine config
@@ -70,10 +71,11 @@ done
 
 # ── Verify installer medium ───────────────────────────────────────────────────
 
-[ -f "$ISO_MOUNT/larch-os/initramfs.img" ] || die "OS initramfs not found on installer medium ($ISO_MOUNT/larch-os/initramfs.img)"
-[ -f "$ISO_MOUNT/larch-os/vmlinuz" ]       || die "Kernel not found on installer medium"
-[ -f "$ISO_MOUNT/EFI/BOOT/BOOTX64.EFI" ]  || die "EFI binary not found on installer medium"
-[ -d "$ISO_MOUNT/loader" ]                 || die "Bootloader config not found on installer medium"
+[ -f "$ISO_MOUNT/larch-os/initramfs.img" ]   || die "OS initramfs not found on installer medium ($ISO_MOUNT/larch-os/initramfs.img)"
+[ -f "$ISO_MOUNT/larch-os/rootfs.squashfs" ] || die "rootfs.squashfs not found on installer medium ($ISO_MOUNT/larch-os/rootfs.squashfs)"
+[ -f "$ISO_MOUNT/larch-os/vmlinuz" ]         || die "Kernel not found on installer medium"
+[ -f "$ISO_MOUNT/EFI/BOOT/BOOTX64.EFI" ]    || die "EFI binary not found on installer medium"
+[ -d "$ISO_MOUNT/loader" ]                   || die "Bootloader config not found on installer medium"
 
 # ── Prompt for system configuration ──────────────────────────────────────────
 
@@ -281,6 +283,10 @@ info "Copying kernel and OS initramfs"
 mkdir -p "$MOUNT_OS/larch-os"
 cp "$ISO_MOUNT/larch-os/vmlinuz"       "$MOUNT_OS/larch-os/vmlinuz"
 cp "$ISO_MOUNT/larch-os/initramfs.img" "$MOUNT_OS/larch-os/initramfs.img"
+sync
+
+info "Copying OS squashfs (this may take a minute)"
+cp "$ISO_MOUNT/larch-os/rootfs.squashfs" "$MOUNT_OS/larch-os/rootfs.squashfs"
 sync
 
 info "Writing installation config to LARCHOS"

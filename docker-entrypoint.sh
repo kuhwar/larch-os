@@ -15,7 +15,7 @@
 #   4.  chroot-configure    — run scripts/setup-chroot.sh inside chroot
 #   5.  clean-rootfs        — strip package manager (scripts/clean-rootfs.sh)
 #   6.  make-squashfs       — compress rootfs into rootfs.squashfs
-#   7.  build-os-initramfs  — embed squashfs into the larch OS initramfs
+#   7.  build-os-initramfs  — build the larch OS initramfs (squashfs is separate)
 #   8.  build-installer     — build the installer initramfs (mounts ISO, runs install.sh)
 #   9.  assemble-iso        — copy all pieces into work/iso/
 #   10. make-iso            — run grub-mkrescue to produce larch-os.iso (UEFI only)
@@ -449,17 +449,13 @@ run_stage 6 "make-squashfs — compress rootfs into squashfs image" && {
 }
 
 # ── Stage 7: build-os-initramfs ──────────────────────────────────────────────
-run_stage 7 "build-os-initramfs — embed squashfs into the larch OS initramfs" && {
+run_stage 7 "build-os-initramfs — build the larch OS initramfs" && {
     [ -f "$SQUASHFS_FILE" ] || \
         die "rootfs.squashfs not found ($SQUASHFS_FILE) — run stage 6 first"
 
-    OS_EXTRAS="$WORK_DIR/os-extras"
-    rm -rf "$OS_EXTRAS"
-    mkdir -p "$OS_EXTRAS"
-    info "[os] Copying rootfs.squashfs into initramfs extras"
-    cp "$SQUASHFS_FILE" "$OS_EXTRAS/rootfs.squashfs"
-
-    build_initramfs "$SCRIPT_DIR/initramfs/os" "$OS_INITRAMFS_FILE" "os" "$OS_EXTRAS"
+    # squashfs is stored as a separate file on the LARCHOS partition and
+    # loop-mounted at boot — it is not embedded in the initramfs.
+    build_initramfs "$SCRIPT_DIR/initramfs/os" "$OS_INITRAMFS_FILE" "os"
 }
 
 # ── Stage 8: build-installer ─────────────────────────────────────────────────
@@ -496,7 +492,10 @@ run_stage 9 "assemble-iso — copy all files into ISO tree" && {
     # Larch OS to be installed — the installer copies these to the target disk
     [ -f "$OS_INITRAMFS_FILE" ] || \
         die "OS initramfs not found — run stage 7 first"
+    [ -f "$SQUASHFS_FILE" ] || \
+        die "rootfs.squashfs not found — run stage 6 first"
     cp "$OS_INITRAMFS_FILE" "$ISO_ROOT/larch-os/initramfs.img"
+    cp "$SQUASHFS_FILE"     "$ISO_ROOT/larch-os/rootfs.squashfs"
     cp "$VMLINUZ"           "$ISO_ROOT/larch-os/vmlinuz"
 
     # Bootloader files for the installed disk — installer copies these to LARCHOS
