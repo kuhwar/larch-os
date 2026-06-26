@@ -99,7 +99,7 @@ Ten stages executed in order; `--stage N` skips stages before N, `--only N` runs
 5. **clean-rootfs** — runs `scripts/clean-rootfs.sh` inside chroot to physically remove apt/dpkg and dev headers
 6. **make-squashfs** — `mksquashfs work/rootfs work/rootfs.squashfs -comp zstd -Xcompression-level 19`
 7. **build-os-initramfs** — builds the tiny OS initramfs (`work/os-initramfs.img`): busybox + modules + init, **no squashfs**. Squashfs lives separately on the LARCHOS partition and is loop-mounted at boot.
-8. **build-installer** — builds the installer initramfs (`work/installer-initramfs.img`): busybox + modules + `install.sh` + tool binaries (sfdisk, wipefs, mkfs.fat, mkfs.ext4, openssl, blockdev). GRUB boots this to run the installer.
+8. **build-installer** — builds the installer initramfs (`work/installer-initramfs.img`): busybox + modules + `install.sh` + tool binaries (sfdisk, wipefs, mkfs.fat, mkfs.ext4, openssl, blockdev, and — if present in the rootfs — `dialog` + terminfo for the full-screen installer form). GRUB boots this to run the installer.
 9. **assemble-iso** — builds `work/iso/` directory tree (see ISO layout below)
 10. **make-iso** — `grub-mkrescue -d /usr/lib/grub/x86_64-efi -o larch-os.iso work/iso/ -- -volid LARCHISO` (`-d` pins a single GRUB platform so the ISO is **UEFI-only**)
 

@@ -40,6 +40,24 @@ die() {
 info() { echo "  >> $*"; }
 nl()   { echo ""; }
 
+# Wipe the screen (used to clear dialog's drawing before/after plain output).
+clear_screen() { printf '\033[2J\033[3J\033[H'; }
+
+# ── Terminal UI (dialog) ──────────────────────────────────────────────────────
+# Prefer a full-screen `dialog` form when the binary and a usable terminfo entry
+# are present in the initramfs; otherwise fall back to the plain read/stty
+# prompts further down. The build bundles `dialog` only opportunistically (see
+# build_installer_initramfs), so HAVE_DIALOG=0 must remain a working path.
+
+export TERM="${TERM:-linux}"
+export TERMINFO="${TERMINFO:-/usr/share/terminfo}"
+DIALOG_BT="larch-os installer"
+DIALOG_TMP="/run/larch-dialog.out"
+HAVE_DIALOG=0
+if command -v dialog >/dev/null 2>&1 && dialog --print-maxsize >/dev/null 2>&1; then
+    HAVE_DIALOG=1
+fi
+
 confirm() {
     [ "$AUTO_YES" -eq 1 ] && return 0
     printf "%s [y/N] " "$*"
@@ -50,6 +68,8 @@ confirm() {
 cleanup() {
     umount "$MOUNT_OS"   2>/dev/null || true
     umount "$MOUNT_HOME" 2>/dev/null || true
+    # The dialog scratch file briefly holds the typed password — remove it.
+    rm -f "$DIALOG_TMP" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -135,7 +155,63 @@ prompt_config() {
     done
 }
 
-prompt_config
+# Validate the collected fields. Emits a one-line, \Z1-coloured error to stdout
+# and returns non-zero when invalid; returns 0 (no output) when everything is OK.
+validate_config() {
+    _pw2="$1"
+    case "$LARCH_HOSTNAME" in
+        ""|-*|*-)        printf '\Z1Hostname is empty or starts/ends with a hyphen.\Zn' ; return 1 ;;
+        *[!a-zA-Z0-9-]*) printf '\Z1Hostname: only letters, numbers and hyphens allowed.\Zn' ; return 1 ;;
+    esac
+    case "$LARCH_USERNAME" in
+        "")           printf '\Z1Username cannot be empty.\Zn' ; return 1 ;;
+        *[!a-z0-9_-]*) printf '\Z1Username: only lowercase letters, numbers, _ and -.\Zn' ; return 1 ;;
+    esac
+    if [ -z "$LARCH_PASSWORD" ]; then
+        printf '\Z1Password cannot be empty.\Zn' ; return 1
+    elif [ "$LARCH_PASSWORD" != "$_pw2" ]; then
+        printf '\Z1Passwords do not match.\Zn' ; return 1
+    fi
+    return 0
+}
+
+# Single-screen dialog form for hostname/username/password/confirm. Loops until
+# the fields validate; an inline red error is shown above the fields on retry.
+form_config() {
+    local rc errmsg="" _pw2
+    while true; do
+        : > "$DIALOG_TMP"
+        dialog --insecure --colors --no-cancel --ok-label "Continue" \
+            --backtitle "$DIALOG_BT" \
+            --title " System Configuration " \
+            --mixedform "${errmsg:+$errmsg\n\n}Use Tab / arrow keys to move between fields; Enter accepts." \
+            15 66 0 \
+            "Hostname:" 1 2 "$LARCH_HOSTNAME" 1 13 36 64 0 \
+            "Username:" 3 2 "$LARCH_USERNAME" 3 13 36 64 0 \
+            "Password:" 5 2 ""                5 13 36 64 1 \
+            "Confirm:"  7 2 ""                7 13 36 64 1 \
+            2>"$DIALOG_TMP"
+        rc=$?
+        if [ "$rc" -ne 0 ]; then
+            # ESC (there is no Cancel button) — confirm abort, else re-show form.
+            if dialog --backtitle "$DIALOG_BT" --yesno "Abort the installation?" 7 44; then
+                clear_screen; echo "Aborted."; exit 0
+            fi
+            continue
+        fi
+        LARCH_HOSTNAME=$(sed -n '1p' "$DIALOG_TMP")
+        LARCH_USERNAME=$(sed -n '2p' "$DIALOG_TMP")
+        LARCH_PASSWORD=$(sed -n '3p' "$DIALOG_TMP")
+        _pw2=$(sed -n '4p' "$DIALOG_TMP")
+        errmsg=$(validate_config "$_pw2") && break
+    done
+}
+
+if [ "$HAVE_DIALOG" -eq 1 ]; then
+    form_config
+else
+    prompt_config
+fi
 
 # ── Pick target disk ──────────────────────────────────────────────────────────
 
@@ -179,13 +255,43 @@ human_size() {
     fi
 }
 
-nl
+# dialog --menu of installable disks; selection (a /dev path) lands in TARGET_DISK.
+pick_disk_dialog() {
+    set --
+    for _sys in /sys/block/*; do
+        _name=$(basename "$_sys")
+        case "$_name" in
+            loop*|sr*|ram*|fd*|dm-*|md*) continue ;;
+        esac
+        [ -b "/dev/$_name" ] || continue
+        _sectors=$(cat "$_sys/size" 2>/dev/null || echo 0)
+        _size=$(human_size $(( _sectors * 512 )))
+        _vendor=$(cat "$_sys/device/vendor" 2>/dev/null || echo "")
+        _model=$(cat "$_sys/device/model" 2>/dev/null || echo "")
+        _desc=$(echo "$_vendor $_model" | sed 's/^ *//;s/ *$//;s/  */ /g')
+        [ -n "$_desc" ] || _desc="(unknown device)"
+        set -- "$@" "/dev/$_name" "$_size  $_desc"
+    done
+    [ "$#" -gt 0 ] || die "No installable disks found"
+    : > "$DIALOG_TMP"
+    dialog --no-cancel --backtitle "$DIALOG_BT" --title " Target Disk " \
+        --menu "Select the disk to install larch-os onto.\nALL DATA ON THE SELECTED DISK WILL BE ERASED." \
+        18 72 8 "$@" 2>"$DIALOG_TMP"
+    [ $? -eq 0 ] || { clear_screen; echo "Aborted."; exit 0; }
+    TARGET_DISK=$(cat "$DIALOG_TMP")
+}
+
 if [ -z "$TARGET_DISK" ]; then
-    echo "Available disks:"
-    list_disks
-    nl
-    printf "Target disk (e.g. /dev/sda): "
-    read -r TARGET_DISK
+    if [ "$HAVE_DIALOG" -eq 1 ]; then
+        pick_disk_dialog
+    else
+        nl
+        echo "Available disks:"
+        list_disks
+        nl
+        printf "Target disk (e.g. /dev/sda): "
+        read -r TARGET_DISK
+    fi
 fi
 
 [ -b "$TARGET_DISK" ] || die "Not a block device: $TARGET_DISK"
@@ -197,20 +303,38 @@ esac
 
 # ── Confirm ───────────────────────────────────────────────────────────────────
 
-nl
-echo "╔══════════════════════════════════════════════╗"
-echo "  larch-os installer — summary"
-echo "╠══════════════════════════════════════════════╣"
-printf "  Hostname      : %s\n" "$LARCH_HOSTNAME"
-printf "  Username      : %s\n" "$LARCH_USERNAME"
-printf "  Target disk   : %s\n" "$TARGET_DISK"
-printf "  OS partition  : %s  (FAT32, %s, label LARCHOS)\n" "$PART1" "$OS_PART_SIZE"
-printf "  Home partition: %s  (ext4,  rest of disk)\n" "$PART2"
-echo ""
-echo "  WARNING: ALL DATA ON $TARGET_DISK WILL BE DESTROYED."
-echo "╚══════════════════════════════════════════════╝"
-nl
-confirm "Proceed with installation?" || { echo "Aborted."; exit 0; }
+if [ "$AUTO_YES" -eq 1 ]; then
+    :   # non-interactive: caller already authorised the wipe with --yes
+elif [ "$HAVE_DIALOG" -eq 1 ]; then
+    dialog --colors --defaultno --yes-label "Install" --no-label "Cancel" \
+        --backtitle "$DIALOG_BT" --title " Confirm Installation " \
+        --yesno "\
+  Hostname       : $LARCH_HOSTNAME
+  Username       : $LARCH_USERNAME
+  Target disk    : $TARGET_DISK
+  OS partition   : $PART1  (FAT32, $OS_PART_SIZE, LARCHOS)
+  Home partition : $PART2  (ext4, remainder)
+
+  \Z1WARNING: ALL DATA ON $TARGET_DISK WILL BE DESTROYED.\Zn" \
+        15 66 \
+        || { clear_screen; echo "Aborted."; exit 0; }
+    clear_screen
+else
+    nl
+    echo "╔══════════════════════════════════════════════╗"
+    echo "  larch-os installer — summary"
+    echo "╠══════════════════════════════════════════════╣"
+    printf "  Hostname      : %s\n" "$LARCH_HOSTNAME"
+    printf "  Username      : %s\n" "$LARCH_USERNAME"
+    printf "  Target disk   : %s\n" "$TARGET_DISK"
+    printf "  OS partition  : %s  (FAT32, %s, label LARCHOS)\n" "$PART1" "$OS_PART_SIZE"
+    printf "  Home partition: %s  (ext4,  rest of disk)\n" "$PART2"
+    echo ""
+    echo "  WARNING: ALL DATA ON $TARGET_DISK WILL BE DESTROYED."
+    echo "╚══════════════════════════════════════════════╝"
+    nl
+    confirm "Proceed with installation?" || { echo "Aborted."; exit 0; }
+fi
 
 # ── Generate config files ─────────────────────────────────────────────────────
 
@@ -326,17 +450,32 @@ trap - EXIT
 
 # ── Done ─────────────────────────────────────────────────────────────────────
 
-nl
-echo "╔══════════════════════════════════════════════╗"
-echo "  Installation complete!"
-echo ""
-printf "  Hostname : %s\n" "$LARCH_HOSTNAME"
-printf "  User     : %s\n" "$LARCH_USERNAME"
-printf "  OS       : %s  (LARCHOS)\n"   "$PART1"
-printf "  Home     : %s  (LARCHHOME)\n" "$PART2"
-echo ""
-echo "  Remove the installation media, then press Enter to reboot."
-echo "╚══════════════════════════════════════════════╝"
-read -r _
+if [ "$HAVE_DIALOG" -eq 1 ]; then
+    dialog --backtitle "$DIALOG_BT" --title " Installation Complete " \
+        --msgbox "\
+  larch-os has been installed successfully.
+
+  Hostname : $LARCH_HOSTNAME
+  User     : $LARCH_USERNAME
+  OS       : $PART1  (LARCHOS)
+  Home     : $PART2  (LARCHHOME)
+
+  Remove the installation media, then choose OK to reboot." \
+        15 60
+    clear_screen
+else
+    nl
+    echo "╔══════════════════════════════════════════════╗"
+    echo "  Installation complete!"
+    echo ""
+    printf "  Hostname : %s\n" "$LARCH_HOSTNAME"
+    printf "  User     : %s\n" "$LARCH_USERNAME"
+    printf "  OS       : %s  (LARCHOS)\n"   "$PART1"
+    printf "  Home     : %s  (LARCHHOME)\n" "$PART2"
+    echo ""
+    echo "  Remove the installation media, then press Enter to reboot."
+    echo "╚══════════════════════════════════════════════╝"
+    read -r _
+fi
 umount /mnt/iso 2>/dev/null || true
 reboot
