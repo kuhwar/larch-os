@@ -23,6 +23,7 @@ OS_PART_SIZE="3GiB"
 TARGET_DISK=""
 AUTO_YES=0
 MOUNT_OS="/run/larch-target-os"
+MOUNT_HOME="/run/larch-target-home"
 
 LARCH_HOSTNAME=""
 LARCH_USERNAME=""
@@ -47,7 +48,8 @@ confirm() {
 }
 
 cleanup() {
-    umount "$MOUNT_OS" 2>/dev/null || true
+    umount "$MOUNT_OS"   2>/dev/null || true
+    umount "$MOUNT_HOME" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -303,22 +305,22 @@ sync
 umount "$MOUNT_OS"
 
 # ── Format and seed home partition ───────────────────────────────────────────
-# Use mkfs.ext4 -d to pre-populate the partition from a seed directory at
-# format time. This avoids needing to mount /dev/PART2 in the installer
-# initramfs, where busybox mount's ext4 helper path is broken.
 
-HOME_SEED="/tmp/larch-home-seed"
-rm -rf "$HOME_SEED"
-mkdir -p "$HOME_SEED"
-cp -a /mnt/iso/skel/. "$HOME_SEED/" 2>/dev/null || true
-chown -R 1000:1000 "$HOME_SEED"
-chmod 0750 "$HOME_SEED"
+mkdir -p "$MOUNT_HOME"
 
 info "Formatting home partition as ext4 ($PART2)"
+mkfs.ext4 -F -L LARCHHOME -m 0 "$PART2"
+
+mount_or_die ext4 "$PART2" "$MOUNT_HOME"
+
 info "Seeding home partition for $LARCH_USERNAME"
-mkfs.ext4 -F -L LARCHHOME -m 1 -d "$HOME_SEED" "$PART2"
-rm -rf "$HOME_SEED"
+cp -a /mnt/iso/skel/. "$MOUNT_HOME/" 2>/dev/null || true
+chown -R 1000:1000 "$MOUNT_HOME"
+chown 0:0 "$MOUNT_HOME/lost+found" 2>/dev/null || true
+chmod 0750 "$MOUNT_HOME"
+
 sync
+umount "$MOUNT_HOME"
 
 trap - EXIT
 

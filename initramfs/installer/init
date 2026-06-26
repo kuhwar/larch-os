@@ -32,6 +32,7 @@ load_mod nls_utf8
 load_mod nls_cp437
 load_mod nls_ascii
 load_mod crc16
+load_mod crc32c_generic
 load_mod mbcache
 load_mod jbd2
 load_mod ext4

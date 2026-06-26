@@ -20,6 +20,7 @@ nls_cp437
 nls_ascii
 # ext4 deps must be listed explicitly so the build copies them into the initramfs
 crc16
+crc32c_generic
 mbcache
 jbd2
 ext4
