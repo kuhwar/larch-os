@@ -10,9 +10,19 @@
 #   /mnt/iso/EFI/BOOT/BOOTX64.EFI     — systemd-boot
 #   /mnt/iso/loader/                   — bootloader config
 #
-# Asks for:  hostname · username · password · target disk
-# Writes to LARCHOS:  vmlinuz · initramfs.img · bootloader · per-machine config
-#                     (hostname, hosts, passwd, shadow, username, fstab)
+# Picks the target disk first. A disk that already holds a larch-os install is
+# marked [Larch OS], listed first and pre-selected; choosing it offers two modes:
+#
+#   Update (default) — replace the OS payload + bootloader (vmlinuz, initramfs.img,
+#     rootfs.squashfs, EFI binary, loader config) in place. The per-machine config
+#     files and the LARCHHOME partition are preserved; nothing is reformatted.
+#
+#   Clean install — the flow below: ask hostname · username · password, then wipe
+#     and repartition the disk.
+#
+# Clean install writes to LARCHOS:
+#   vmlinuz · initramfs.img · bootloader · per-machine config
+#   (hostname, hosts, passwd, shadow, username, machine-id, fstab)
 
 set -e
 
@@ -148,8 +158,6 @@ form_config() {
     done
 }
 
-form_config
-
 # ── Pick target disk ──────────────────────────────────────────────────────────
 
 # Render a byte count as a human-readable capacity (GB/TB, base-10 like disks).
@@ -166,27 +174,62 @@ human_size() {
     fi
 }
 
+# Is this partition a larch-os system partition? The installer formats LARCHOS as
+# FAT32 with `mkfs.fat -n LARCHOS`, which writes the 11-byte volume label into the
+# boot sector at offset 71 (FAT BS_VolLab). busybox has no `blkid`, so read it raw
+# with dd — this needs no mount and works per-partition (findfs only resolves a
+# label to a single device, so it can't tell which disk owns it).
+part_is_larchos() {
+    [ -b "$1" ] || return 1
+    _lbl=$(dd if="$1" bs=1 skip=71 count=11 2>/dev/null | tr -d ' \000')
+    [ "$_lbl" = "LARCHOS" ]
+}
+
+# Echo the /dev path of the LARCHOS partition on a disk (by sysfs name, e.g. sda),
+# or nothing. Partition sysfs dirs are prefixed with the disk name (sda1, nvme0n1p1).
+find_larchos_part() {
+    for _pp in /sys/block/"$1"/"$1"*/partition; do
+        [ -f "$_pp" ] || continue
+        _pn=$(basename "$(dirname "$_pp")")
+        if part_is_larchos "/dev/$_pn"; then echo "/dev/$_pn"; return 0; fi
+    done
+    return 1
+}
+
 # dialog --menu of installable disks; selection (a /dev path) lands in TARGET_DISK.
+# Disks that already carry a larch-os install are marked and listed first, with the
+# first such disk pre-selected so updating an existing install is the happy path.
 pick_disk_dialog() {
+    _default=""
     set --
-    for _sys in /sys/block/*; do
-        _name=$(basename "$_sys")
-        case "$_name" in
-            loop*|sr*|ram*|fd*|dm-*|md*) continue ;;
-        esac
-        [ -b "/dev/$_name" ] || continue
-        _sectors=$(cat "$_sys/size" 2>/dev/null || echo 0)
-        _size=$(human_size $(( _sectors * 512 )))
-        _vendor=$(cat "$_sys/device/vendor" 2>/dev/null || echo "")
-        _model=$(cat "$_sys/device/model" 2>/dev/null || echo "")
-        _desc=$(echo "$_vendor $_model" | sed 's/^ *//;s/ *$//;s/  */ /g')
-        [ -n "$_desc" ] || _desc="(unknown device)"
-        set -- "$@" "/dev/$_name" "$_size  $_desc"
+    # Two passes so larch-os disks come first; within a pass, sysfs order.
+    for _want_larch in 1 0; do
+        for _sys in /sys/block/*; do
+            _name=$(basename "$_sys")
+            case "$_name" in
+                loop*|sr*|ram*|fd*|dm-*|md*) continue ;;
+            esac
+            [ -b "/dev/$_name" ] || continue
+            if find_larchos_part "$_name" >/dev/null; then _is_larch=1; else _is_larch=0; fi
+            [ "$_is_larch" -eq "$_want_larch" ] || continue
+            _sectors=$(cat "$_sys/size" 2>/dev/null || echo 0)
+            _size=$(human_size $(( _sectors * 512 )))
+            _vendor=$(cat "$_sys/device/vendor" 2>/dev/null || echo "")
+            _model=$(cat "$_sys/device/model" 2>/dev/null || echo "")
+            _desc=$(echo "$_vendor $_model" | sed 's/^ *//;s/ *$//;s/  */ /g')
+            [ -n "$_desc" ] || _desc="(unknown device)"
+            if [ "$_is_larch" -eq 1 ]; then
+                _desc="$_desc  [Larch OS]"
+                [ -n "$_default" ] || _default="/dev/$_name"
+            fi
+            set -- "$@" "/dev/$_name" "$_size  $_desc"
+        done
     done
     [ "$#" -gt 0 ] || die "No installable disks found"
     : > "$DIALOG_TMP"
-    dialog --no-cancel --backtitle "$DIALOG_BT" --title " Target Disk " \
-        --menu "Select the disk to install larch-os onto.\nALL DATA ON THE SELECTED DISK WILL BE ERASED." \
+    dialog --no-cancel --default-item "$_default" \
+        --backtitle "$DIALOG_BT" --title " Target Disk " \
+        --menu "Select the target disk. Disks marked [Larch OS] already have larch-os installed and can be updated in place.\nClean installs ERASE the selected disk." \
         18 72 8 "$@" 2>"$DIALOG_TMP"
     [ $? -eq 0 ] || { clear_screen; echo "Aborted."; exit 0; }
     TARGET_DISK=$(cat "$DIALOG_TMP")
@@ -200,6 +243,109 @@ case "$TARGET_DISK" in
     *nvme*|*mmcblk*) PART1="${TARGET_DISK}p1"; PART2="${TARGET_DISK}p2" ;;
     *)               PART1="${TARGET_DISK}1";  PART2="${TARGET_DISK}2"  ;;
 esac
+
+# ── Update vs clean install ───────────────────────────────────────────────────
+# If the chosen disk already holds a larch-os install, offer an in-place update
+# (replace the OS payload + bootloader, keep config files and the home partition)
+# as the default. Otherwise, fall through to a clean install.
+
+# Replace the OS payload + bootloader on an existing LARCHOS partition, preserving
+# the per-machine config files (hostname, hosts, passwd, shadow, username,
+# machine-id, fstab) and the LARCHHOME partition. No partitioning, no formatting.
+do_update() {
+    _osdev="$1"
+    if [ "$AUTO_YES" -ne 1 ]; then
+        dialog --colors --defaultno --yes-label "Update" --no-label "Cancel" \
+            --backtitle "$DIALOG_BT" --title " Confirm Update " \
+            --yesno "\
+  Target disk  : $TARGET_DISK
+  OS partition : $_osdev  (LARCHOS)
+
+  The OS image and bootloader (kernel, initramfs, root
+  filesystem, EFI binary, loader config) will be replaced
+  with this version.
+
+  Your user account, settings and home data are preserved.
+
+  \Z1No partitions will be reformatted.\Zn" \
+            16 66 \
+            || { clear_screen; echo "Aborted."; exit 0; }
+        clear_screen
+    fi
+
+    info "Mounting LARCHOS partition ($_osdev)"
+    mkdir -p "$MOUNT_OS"
+    mount_or_die vfat "$_osdev" "$MOUNT_OS"
+    [ -f "$MOUNT_OS/larch-os/rootfs.squashfs" ] \
+        || die "No existing larch-os image on $_osdev (larch-os/rootfs.squashfs missing)"
+
+    info "Updating EFI binary"
+    mkdir -p "$MOUNT_OS/EFI/BOOT"
+    cp "$ISO_MOUNT/EFI/BOOT/BOOTX64.EFI" "$MOUNT_OS/EFI/BOOT/BOOTX64.EFI"
+
+    info "Updating bootloader config"
+    rm -rf "$MOUNT_OS/loader"
+    cp -r "$ISO_MOUNT/loader" "$MOUNT_OS/"
+
+    info "Updating kernel and OS initramfs"
+    mkdir -p "$MOUNT_OS/larch-os"
+    cp "$ISO_MOUNT/larch-os/vmlinuz"       "$MOUNT_OS/larch-os/vmlinuz"
+    cp "$ISO_MOUNT/larch-os/initramfs.img" "$MOUNT_OS/larch-os/initramfs.img"
+    sync
+
+    info "Updating OS squashfs (this may take a minute)"
+    cp "$ISO_MOUNT/larch-os/rootfs.squashfs" "$MOUNT_OS/larch-os/rootfs.squashfs"
+    sync
+
+    umount "$MOUNT_OS"
+    trap - EXIT
+
+    dialog --backtitle "$DIALOG_BT" --title " Update Complete " \
+        --msgbox "\
+  larch-os has been updated successfully.
+
+  Disk : $TARGET_DISK
+  OS   : $_osdev  (LARCHOS)
+
+  Your user account, settings and home data are unchanged.
+
+  Remove the installation media, then choose OK to reboot." \
+        15 64
+    clear_screen
+    umount /mnt/iso 2>/dev/null || true
+    # install.sh is PID 1 (init exec's it). Plain `reboot` only signals init to
+    # reboot — but we *are* init, and a bare shell doesn't act on that signal, so
+    # the script would just exit and the kernel would panic ("Attempted to kill
+    # init"). `-f` syncs and calls the reboot(2) syscall directly. exit 0 is a
+    # belt-and-braces guard in case reboot ever returns.
+    reboot -f
+    exit 0
+}
+
+LARCHOS_PART=""
+_disk_name=$(basename "$TARGET_DISK")
+LARCHOS_PART=$(find_larchos_part "$_disk_name" || true)
+
+# --yes means a non-interactive clean install; don't pop the update menu there.
+if [ -n "$LARCHOS_PART" ] && [ "$AUTO_YES" -ne 1 ]; then
+    : > "$DIALOG_TMP"
+    dialog --no-cancel --default-item update \
+        --backtitle "$DIALOG_BT" --title " Existing larch-os Detected " \
+        --menu "An existing larch-os installation was found on $TARGET_DISK ($LARCHOS_PART).\n\nChoose how to proceed:" \
+        14 72 2 \
+        update "Update — replace OS image, keep account, settings & home" \
+        clean  "Clean install — ERASE the whole disk and set up anew" \
+        2>"$DIALOG_TMP"
+    [ $? -eq 0 ] || { clear_screen; echo "Aborted."; exit 0; }
+    if [ "$(cat "$DIALOG_TMP")" = "update" ]; then
+        do_update "$LARCHOS_PART"   # reboots; does not return
+    fi
+fi
+
+# ── Clean install ─────────────────────────────────────────────────────────────
+# From here on is the fresh-install path: collect config, then wipe + partition.
+
+form_config
 
 # ── Confirm ───────────────────────────────────────────────────────────────────
 
@@ -369,4 +515,6 @@ dialog --backtitle "$DIALOG_BT" --title " Installation Complete " \
     15 60
 clear_screen
 umount /mnt/iso 2>/dev/null || true
-reboot
+# See do_update: install.sh is PID 1, so `-f` (sync + reboot(2) syscall) is
+# required — a plain `reboot` here just exits init and panics the kernel.
+reboot -f
