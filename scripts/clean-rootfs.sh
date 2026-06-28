@@ -52,6 +52,14 @@ find /usr/include -mindepth 1 -delete 2>/dev/null || true
 find /usr/lib     -name '*.a'  -delete 2>/dev/null || true
 find /usr/lib     -name '*.la' -delete 2>/dev/null || true
 
+# ── Remove DKMS build artifacts ──────────────────────────────────────────────
+# broadcom-sta-dkms builds wl.ko into /lib/modules during stage 4; the source
+# tree and headers are not needed at runtime.
+log "Removing DKMS sources and kernel headers"
+rm -rf /usr/src/linux-headers-* /usr/src/broadcom-sta-* /var/lib/dkms 2>/dev/null || true
+find /usr/lib/modules -maxdepth 2 -name 'build' -type l -delete 2>/dev/null || true
+find /usr/lib/modules -maxdepth 2 -name 'source' -type l -delete 2>/dev/null || true
+
 # ── Clear temporary files ─────────────────────────────────────────────────────
 log "Clearing caches and temporary files"
 rm -rf \

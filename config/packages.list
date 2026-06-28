@@ -134,3 +134,10 @@ firmware-realtek
 firmware-atheros
 firmware-brcm80211
 firmware-mediatek
+
+# ── Broadcom BCM4360 WiFi (2015 MacBook Air) ─────────────────────────────────
+# BCM4360 (14e4:43a0) has no open-source driver. broadcom-sta-dkms provides the
+# proprietary wl.ko. linux-headers-amd64 is required for the DKMS build during
+# stage 4; it is removed by clean-rootfs.sh after the module is compiled.
+broadcom-sta-dkms
+linux-headers-amd64
