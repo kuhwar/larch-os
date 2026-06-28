@@ -96,6 +96,7 @@ load_mod uhci_hcd
 load_mod hid
 load_mod usbhid
 load_mod hid_generic
+load_mod hid-apple
 load_mod evdev
 
 # ── Find LARCHOS partition ────────────────────────────────────────────────────

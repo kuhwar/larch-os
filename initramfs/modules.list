@@ -69,8 +69,8 @@ uhci-hcd
 # ── Input (keyboard) ──────────────────────────────────────────────────────────
 # USB keyboards need the HID stack; hid + hid-generic are loadable modules
 # (not built-in). PS/2 keyboards work without these (i8042/atkbd are built-in).
-# NOTE: the file is hid-generic.ko (hyphen); "hid_generic" never matched it.
 hid
 usbhid
 hid-generic
+hid-apple
 evdev
