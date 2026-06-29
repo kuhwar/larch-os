@@ -53,6 +53,26 @@ nl()   { echo ""; }
 # Wipe the screen (used to clear dialog's drawing before/after plain output).
 clear_screen() { printf '\033[2J\033[3J\033[H'; }
 
+# Accumulate step messages and show them inside a dialog infobox so installation
+# progress stays on screen rather than bleeding to the raw terminal.
+INSTALL_STEPS=""
+show_step() {
+    INSTALL_STEPS="${INSTALL_STEPS}  >> $*
+"
+    dialog --backtitle "$DIALOG_BT" --title " Installing... " \
+        --infobox "$INSTALL_STEPS" 20 70 || true
+}
+
+# Reboot the system. Uses sysrq 'b' as the most direct kernel path; falls back
+# to busybox reboot -f. Loops forever if all methods fail to prevent PID 1 exit.
+do_reboot() {
+    sync
+    echo 1 > /proc/sys/kernel/sysrq 2>/dev/null || true
+    echo b > /proc/sysrq-trigger    2>/dev/null || true
+    reboot -f 2>/dev/null || true
+    while true; do sleep 60; done
+}
+
 # ── Terminal UI (dialog) ──────────────────────────────────────────────────────
 # The installer UI is built entirely on `dialog` (ncurses) — it is a hard
 # dependency. The build bundles it into the installer initramfs (stage 8) and
@@ -106,55 +126,89 @@ done
 
 # ── Prompt for system configuration ──────────────────────────────────────────
 
-# Validate the collected fields. Emits a one-line, \Z1-coloured error to stdout
-# and returns non-zero when invalid; returns 0 (no output) when everything is OK.
-validate_config() {
-    _pw2="$1"
-    case "$LARCH_HOSTNAME" in
-        ""|-*|*-)        printf '\Z1Hostname is empty or starts/ends with a hyphen.\Zn' ; return 1 ;;
-        *[!a-zA-Z0-9-]*) printf '\Z1Hostname: only letters, numbers and hyphens allowed.\Zn' ; return 1 ;;
-    esac
-    case "$LARCH_USERNAME" in
-        "")           printf '\Z1Username cannot be empty.\Zn' ; return 1 ;;
-        *[!a-z0-9_-]*) printf '\Z1Username: only lowercase letters, numbers, _ and -.\Zn' ; return 1 ;;
-    esac
-    if [ -z "$LARCH_PASSWORD" ]; then
-        printf '\Z1Password cannot be empty.\Zn' ; return 1
-    elif [ "$LARCH_PASSWORD" != "$_pw2" ]; then
-        printf '\Z1Passwords do not match.\Zn' ; return 1
-    fi
-    return 0
-}
-
-# Single-screen dialog form for hostname/username/password/confirm. Loops until
-# the fields validate; an inline red error is shown above the fields on retry.
+# Four sequential prompts — one per field — so Enter always advances to the
+# next field rather than jumping to the OK button (a --mixedform limitation).
 form_config() {
-    local rc errmsg="" _pw2
+    local _pw2
+
+    # ── Hostname ──────────────────────────────────────────────────────────────
     while true; do
         : > "$DIALOG_TMP"
-        dialog --insecure --colors --no-cancel --ok-label "Continue" \
-            --backtitle "$DIALOG_BT" \
-            --title " System Configuration " \
-            --mixedform "${errmsg:+$errmsg\n\n}Use Tab / arrow keys to move between fields; Enter accepts." \
-            15 66 0 \
-            "Hostname:" 1 2 "$LARCH_HOSTNAME" 1 13 36 64 0 \
-            "Username:" 3 2 "$LARCH_USERNAME" 3 13 36 64 0 \
-            "Password:" 5 2 ""                5 13 36 64 1 \
-            "Confirm:"  7 2 ""                7 13 36 64 1 \
+        dialog --no-cancel --ok-label "Next" \
+            --backtitle "$DIALOG_BT" --title " System Configuration (1/4) " \
+            --inputbox "Hostname  (letters, numbers and hyphens):" 8 60 "$LARCH_HOSTNAME" \
             2>"$DIALOG_TMP"
-        rc=$?
-        if [ "$rc" -ne 0 ]; then
-            # ESC (there is no Cancel button) — confirm abort, else re-show form.
-            if dialog --backtitle "$DIALOG_BT" --yesno "Abort the installation?" 7 44; then
-                clear_screen; echo "Aborted."; exit 0
-            fi
+        if [ $? -ne 0 ]; then
             continue
         fi
-        LARCH_HOSTNAME=$(sed -n '1p' "$DIALOG_TMP")
-        LARCH_USERNAME=$(sed -n '2p' "$DIALOG_TMP")
-        LARCH_PASSWORD=$(sed -n '3p' "$DIALOG_TMP")
-        _pw2=$(sed -n '4p' "$DIALOG_TMP")
-        errmsg=$(validate_config "$_pw2") && break
+        LARCH_HOSTNAME=$(cat "$DIALOG_TMP")
+        case "$LARCH_HOSTNAME" in
+            ""|-*|*-)
+                dialog --backtitle "$DIALOG_BT" \
+                    --msgbox "Hostname cannot be empty or start/end with a hyphen." 6 56
+                continue ;;
+            *[!a-zA-Z0-9-]*)
+                dialog --backtitle "$DIALOG_BT" \
+                    --msgbox "Hostname: only letters, numbers and hyphens allowed." 6 56
+                continue ;;
+        esac
+        break
+    done
+
+    # ── Username ──────────────────────────────────────────────────────────────
+    while true; do
+        : > "$DIALOG_TMP"
+        dialog --no-cancel --ok-label "Next" \
+            --backtitle "$DIALOG_BT" --title " System Configuration (2/4) " \
+            --inputbox "Username  (lowercase letters, numbers, _ and -):" 8 60 "$LARCH_USERNAME" \
+            2>"$DIALOG_TMP"
+        if [ $? -ne 0 ]; then
+            continue
+        fi
+        LARCH_USERNAME=$(cat "$DIALOG_TMP")
+        case "$LARCH_USERNAME" in
+            "")
+                dialog --backtitle "$DIALOG_BT" --msgbox "Username cannot be empty." 5 40
+                continue ;;
+            *[!a-z0-9_-]*)
+                dialog --backtitle "$DIALOG_BT" \
+                    --msgbox "Username: only lowercase letters, numbers, _ and -." 5 56
+                continue ;;
+        esac
+        break
+    done
+
+    # ── Password + confirm ────────────────────────────────────────────────────
+    while true; do
+        : > "$DIALOG_TMP"
+        dialog --insecure --no-cancel --ok-label "Next" \
+            --backtitle "$DIALOG_BT" --title " System Configuration (3/4) " \
+            --passwordbox "Password:" 8 60 \
+            2>"$DIALOG_TMP"
+        if [ $? -ne 0 ]; then
+            continue
+        fi
+        LARCH_PASSWORD=$(cat "$DIALOG_TMP")
+
+        : > "$DIALOG_TMP"
+        dialog --insecure --no-cancel --ok-label "Continue" \
+            --backtitle "$DIALOG_BT" --title " System Configuration (4/4) " \
+            --passwordbox "Confirm password:" 8 60 \
+            2>"$DIALOG_TMP"
+        if [ $? -ne 0 ]; then
+            continue
+        fi
+        _pw2=$(cat "$DIALOG_TMP")
+
+        if [ -z "$LARCH_PASSWORD" ]; then
+            dialog --backtitle "$DIALOG_BT" --msgbox "Password cannot be empty." 5 40
+            continue
+        fi
+        if [ "$LARCH_PASSWORD" != "$_pw2" ]; then
+            dialog --backtitle "$DIALOG_BT" --msgbox "Passwords do not match." 5 40
+            continue
+        fi
+        break
     done
 }
 
@@ -199,41 +253,54 @@ find_larchos_part() {
 # dialog --menu of installable disks; selection (a /dev path) lands in TARGET_DISK.
 # Disks that already carry a larch-os install are marked and listed first, with the
 # first such disk pre-selected so updating an existing install is the happy path.
+# ESC re-shows the dialog. Restart button calls do_reboot.
 pick_disk_dialog() {
-    _default=""
-    set --
-    # Two passes so larch-os disks come first; within a pass, sysfs order.
-    for _want_larch in 1 0; do
-        for _sys in /sys/block/*; do
-            _name=$(basename "$_sys")
-            case "$_name" in
-                loop*|sr*|ram*|fd*|dm-*|md*) continue ;;
-            esac
-            [ -b "/dev/$_name" ] || continue
-            if find_larchos_part "$_name" >/dev/null; then _is_larch=1; else _is_larch=0; fi
-            [ "$_is_larch" -eq "$_want_larch" ] || continue
-            _sectors=$(cat "$_sys/size" 2>/dev/null || echo 0)
-            _size=$(human_size $(( _sectors * 512 )))
-            _vendor=$(cat "$_sys/device/vendor" 2>/dev/null || echo "")
-            _model=$(cat "$_sys/device/model" 2>/dev/null || echo "")
-            _desc=$(echo "$_vendor $_model" | sed 's/^ *//;s/ *$//;s/  */ /g')
-            [ -n "$_desc" ] || _desc="(unknown device)"
-            if [ "$_is_larch" -eq 1 ]; then
-                _desc="$_desc  [Larch OS]"
-                [ -n "$_default" ] || _default="/dev/$_name"
-            fi
-            set -- "$@" "/dev/$_name" "$_size  $_desc"
+    while true; do
+        _default=""
+        set --
+        # Two passes so larch-os disks come first; within a pass, sysfs order.
+        for _want_larch in 1 0; do
+            for _sys in /sys/block/*; do
+                _name=$(basename "$_sys")
+                case "$_name" in
+                    loop*|sr*|ram*|fd*|dm-*|md*) continue ;;
+                esac
+                [ -b "/dev/$_name" ] || continue
+                if find_larchos_part "$_name" >/dev/null; then _is_larch=1; else _is_larch=0; fi
+                [ "$_is_larch" -eq "$_want_larch" ] || continue
+                _sectors=$(cat "$_sys/size" 2>/dev/null || echo 0)
+                _size=$(human_size $(( _sectors * 512 )))
+                _vendor=$(cat "$_sys/device/vendor" 2>/dev/null || echo "")
+                _model=$(cat "$_sys/device/model" 2>/dev/null || echo "")
+                _desc=$(echo "$_vendor $_model" | sed 's/^ *//;s/ *$//;s/  */ /g')
+                [ -n "$_desc" ] || _desc="(unknown device)"
+                if [ "$_is_larch" -eq 1 ]; then
+                    _desc="$_desc  [Larch OS]"
+                    [ -n "$_default" ] || _default="/dev/$_name"
+                fi
+                set -- "$@" "/dev/$_name" "$_size  $_desc"
+            done
         done
+        [ "$#" -gt 0 ] || die "No installable disks found"
+        : > "$DIALOG_TMP"
+        dialog --no-cancel --extra-button --extra-label "Restart" \
+            --default-item "$_default" \
+            --backtitle "$DIALOG_BT" --title " Target Disk " \
+            --menu "Select the target disk. Disks marked [Larch OS] already have larch-os installed and can be updated in place.\nClean installs ERASE the selected disk." \
+            18 72 8 "$@" 2>"$DIALOG_TMP"
+        _rc=$?
+        if [ "$_rc" -eq 0 ]; then
+            TARGET_DISK=$(cat "$DIALOG_TMP")
+            return 0
+        fi
+        if [ "$_rc" -eq 3 ]; then
+            do_reboot
+        fi
+        # ESC (255) or any other code: re-show the dialog silently
     done
-    [ "$#" -gt 0 ] || die "No installable disks found"
-    : > "$DIALOG_TMP"
-    dialog --no-cancel --default-item "$_default" \
-        --backtitle "$DIALOG_BT" --title " Target Disk " \
-        --menu "Select the target disk. Disks marked [Larch OS] already have larch-os installed and can be updated in place.\nClean installs ERASE the selected disk." \
-        18 72 8 "$@" 2>"$DIALOG_TMP"
-    [ $? -eq 0 ] || { clear_screen; echo "Aborted."; exit 0; }
-    TARGET_DISK=$(cat "$DIALOG_TMP")
 }
+
+while true; do
 
 [ -n "$TARGET_DISK" ] || pick_disk_dialog
 
@@ -255,7 +322,7 @@ esac
 do_update() {
     _osdev="$1"
     if [ "$AUTO_YES" -ne 1 ]; then
-        dialog --colors --defaultno --yes-label "Update" --no-label "Cancel" \
+        dialog --colors --yes-label "Update" --no-label "Cancel" \
             --backtitle "$DIALOG_BT" --title " Confirm Update " \
             --yesno "\
   Target disk  : $TARGET_DISK
@@ -268,32 +335,35 @@ do_update() {
   Your user account, settings and home data are preserved.
 
   \Z1No partitions will be reformatted.\Zn" \
-            16 66 \
-            || { clear_screen; echo "Aborted."; exit 0; }
+            16 66
+        if [ $? -ne 0 ]; then
+            return 1
+        fi
         clear_screen
     fi
 
-    info "Mounting LARCHOS partition ($_osdev)"
+    INSTALL_STEPS=""
+    show_step "Mounting LARCHOS partition ($_osdev)"
     mkdir -p "$MOUNT_OS"
     mount_or_die vfat "$_osdev" "$MOUNT_OS"
     [ -f "$MOUNT_OS/larch-os/rootfs.squashfs" ] \
         || die "No existing larch-os image on $_osdev (larch-os/rootfs.squashfs missing)"
 
-    info "Updating EFI binary"
+    show_step "Updating EFI binary"
     mkdir -p "$MOUNT_OS/EFI/BOOT"
     cp "$ISO_MOUNT/EFI/BOOT/BOOTX64.EFI" "$MOUNT_OS/EFI/BOOT/BOOTX64.EFI"
 
-    info "Updating bootloader config"
+    show_step "Updating bootloader config"
     rm -rf "$MOUNT_OS/loader"
     cp -r "$ISO_MOUNT/loader" "$MOUNT_OS/"
 
-    info "Updating kernel and OS initramfs"
+    show_step "Updating kernel and OS initramfs"
     mkdir -p "$MOUNT_OS/larch-os"
     cp "$ISO_MOUNT/larch-os/vmlinuz"       "$MOUNT_OS/larch-os/vmlinuz"
     cp "$ISO_MOUNT/larch-os/initramfs.img" "$MOUNT_OS/larch-os/initramfs.img"
     sync
 
-    info "Updating OS squashfs (this may take a minute)"
+    show_step "Updating OS squashfs (this may take a minute)"
     cp "$ISO_MOUNT/larch-os/rootfs.squashfs" "$MOUNT_OS/larch-os/rootfs.squashfs"
     sync
 
@@ -318,8 +388,7 @@ do_update() {
     # the script would just exit and the kernel would panic ("Attempted to kill
     # init"). `-f` syncs and calls the reboot(2) syscall directly. exit 0 is a
     # belt-and-braces guard in case reboot ever returns.
-    reboot -f
-    exit 0
+    do_reboot
 }
 
 LARCHOS_PART=""
@@ -328,17 +397,25 @@ LARCHOS_PART=$(find_larchos_part "$_disk_name" || true)
 
 # --yes means a non-interactive clean install; don't pop the update menu there.
 if [ -n "$LARCHOS_PART" ] && [ "$AUTO_YES" -ne 1 ]; then
-    : > "$DIALOG_TMP"
-    dialog --no-cancel --default-item update \
-        --backtitle "$DIALOG_BT" --title " Existing larch-os Detected " \
-        --menu "An existing larch-os installation was found on $TARGET_DISK ($LARCHOS_PART).\n\nChoose how to proceed:" \
-        14 72 2 \
-        update "Update — replace OS image, keep account, settings & home" \
-        clean  "Clean install — ERASE the whole disk and set up anew" \
-        2>"$DIALOG_TMP"
-    [ $? -eq 0 ] || { clear_screen; echo "Aborted."; exit 0; }
+    while true; do
+        : > "$DIALOG_TMP"
+        dialog --no-cancel --default-item update \
+            --backtitle "$DIALOG_BT" --title " Existing larch-os Detected " \
+            --menu "An existing larch-os installation was found on $TARGET_DISK ($LARCHOS_PART).\n\nChoose how to proceed:" \
+            14 72 2 \
+            update "Update — replace OS image, keep account, settings & home" \
+            clean  "Clean install — ERASE the whole disk and set up anew" \
+            2>"$DIALOG_TMP"
+        if [ $? -eq 0 ]; then
+            break
+        fi
+        # ESC: re-show
+    done
     if [ "$(cat "$DIALOG_TMP")" = "update" ]; then
-        do_update "$LARCHOS_PART"   # reboots; does not return
+        if ! do_update "$LARCHOS_PART"; then
+            TARGET_DISK=""
+            continue
+        fi
     fi
 fi
 
@@ -350,7 +427,7 @@ form_config
 # ── Confirm ───────────────────────────────────────────────────────────────────
 
 if [ "$AUTO_YES" -ne 1 ]; then
-    dialog --colors --defaultno --yes-label "Install" --no-label "Cancel" \
+    dialog --colors --yes-label "Install" --no-label "Cancel" \
         --backtitle "$DIALOG_BT" --title " Confirm Installation " \
         --yesno "\
   Hostname       : $LARCH_HOSTNAME
@@ -361,9 +438,12 @@ if [ "$AUTO_YES" -ne 1 ]; then
 
   \Z1WARNING: ALL DATA ON $TARGET_DISK WILL BE DESTROYED.\Zn" \
         15 66 \
-        || { clear_screen; echo "Aborted."; exit 0; }
+        || { TARGET_DISK=""; continue; }
     clear_screen
 fi
+
+break
+done
 
 # ── Generate config files ─────────────────────────────────────────────────────
 
@@ -371,7 +451,8 @@ CONFIG_TMP="/run/larch-config"
 rm -rf "$CONFIG_TMP"
 mkdir -p "$CONFIG_TMP"
 
-info "Generating config files"
+INSTALL_STEPS=""
+show_step "Generating config files"
 
 printf '%s\n' "$LARCH_HOSTNAME" > "$CONFIG_TMP/hostname"
 
@@ -415,16 +496,16 @@ printf '/home/%s/.larch/nm-system-connections\t/etc/NetworkManager/system-connec
 
 # ── Partition ─────────────────────────────────────────────────────────────────
 
-info "Unmounting any existing partitions on $TARGET_DISK"
+show_step "Unmounting any existing partitions on $TARGET_DISK"
 for _p in "${TARGET_DISK}"[0-9]* "${TARGET_DISK}"p[0-9]*; do
     [ -b "$_p" ] && umount "$_p" 2>/dev/null || true
 done
 unset _p
 
-info "Creating GPT partition table on $TARGET_DISK"
-wipefs -a "$TARGET_DISK"
+show_step "Creating GPT partition table on $TARGET_DISK"
+wipefs -a "$TARGET_DISK" >/dev/null 2>&1
 printf 'label: gpt\nsize=%s, type=uefi, name=LARCHOS\ntype=linux, name=LARCHHOME\n' \
-    "$OS_PART_SIZE" | sfdisk -q "$TARGET_DISK"
+    "$OS_PART_SIZE" | sfdisk -q "$TARGET_DISK" >/dev/null 2>&1
 blockdev --rereadpt "$TARGET_DISK" 2>/dev/null || true
 
 i=0
@@ -434,30 +515,30 @@ while [ $i -lt 15 ]; do [ -b "$PART1" ] && [ -b "$PART2" ] && break; sleep 1; i=
 
 # ── Format PART1 and install OS files ────────────────────────────────────────
 
-info "Formatting OS partition as FAT32 ($PART1)"
-mkfs.fat -F 32 -n LARCHOS "$PART1"
+show_step "Formatting OS partition as FAT32 ($PART1)"
+mkfs.fat -F 32 -n LARCHOS "$PART1" >/dev/null 2>&1
 
 mkdir -p "$MOUNT_OS"
 mount_or_die vfat "$PART1" "$MOUNT_OS"
 
-info "Installing EFI binary"
+show_step "Installing EFI binary"
 mkdir -p "$MOUNT_OS/EFI/BOOT"
 cp "$ISO_MOUNT/EFI/BOOT/BOOTX64.EFI" "$MOUNT_OS/EFI/BOOT/BOOTX64.EFI"
 
-info "Copying bootloader config"
+show_step "Copying bootloader config"
 cp -r "$ISO_MOUNT/loader" "$MOUNT_OS/"
 
-info "Copying kernel and OS initramfs"
+show_step "Copying kernel and OS initramfs"
 mkdir -p "$MOUNT_OS/larch-os"
 cp "$ISO_MOUNT/larch-os/vmlinuz"       "$MOUNT_OS/larch-os/vmlinuz"
 cp "$ISO_MOUNT/larch-os/initramfs.img" "$MOUNT_OS/larch-os/initramfs.img"
 sync
 
-info "Copying OS squashfs (this may take a minute)"
+show_step "Copying OS squashfs (this may take a minute)"
 cp "$ISO_MOUNT/larch-os/rootfs.squashfs" "$MOUNT_OS/larch-os/rootfs.squashfs"
 sync
 
-info "Writing installation config to LARCHOS"
+show_step "Writing installation config to LARCHOS"
 DEST="$MOUNT_OS/larch-os"
 cp "$CONFIG_TMP/hostname" "$DEST/hostname"
 cp "$CONFIG_TMP/hosts"    "$DEST/hosts"
@@ -475,12 +556,12 @@ umount "$MOUNT_OS"
 
 mkdir -p "$MOUNT_HOME"
 
-info "Formatting home partition as ext4 ($PART2)"
-mkfs.ext4 -F -L LARCHHOME -m 0 "$PART2"
+show_step "Formatting home partition as ext4 ($PART2)"
+mkfs.ext4 -F -L LARCHHOME -m 0 "$PART2" >/dev/null 2>&1
 
 mount_or_die ext4 "$PART2" "$MOUNT_HOME"
 
-info "Seeding home partition for $LARCH_USERNAME"
+show_step "Seeding home partition for $LARCH_USERNAME"
 cp -a /mnt/iso/skel/. "$MOUNT_HOME/" 2>/dev/null || true
 chown -R 1000:1000 "$MOUNT_HOME"
 chown 0:0 "$MOUNT_HOME/lost+found" 2>/dev/null || true
@@ -515,6 +596,4 @@ dialog --backtitle "$DIALOG_BT" --title " Installation Complete " \
     15 60
 clear_screen
 umount /mnt/iso 2>/dev/null || true
-# See do_update: install.sh is PID 1, so `-f` (sync + reboot(2) syscall) is
-# required — a plain `reboot` here just exits init and panics the kernel.
-reboot -f
+do_reboot
