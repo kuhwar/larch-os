@@ -270,9 +270,13 @@ build_installer_initramfs() {
 
     populate_initramfs_tree "$src_dir" "$build_dir" "installer"
 
-    # Copy larch-install script
+    # Copy larch-install script and its library files
     install -m 755 "$SCRIPT_DIR/installer/install.sh" \
         "$build_dir/usr/sbin/larch-install"
+    for _lib in "$SCRIPT_DIR/installer/lib/"*.sh; do
+        [ -f "$_lib" ] || continue
+        install -D -m 644 "$_lib" "$build_dir/usr/lib/larch/$(basename "$_lib")"
+    done
 
     # Copy /etc/skel from larch OS rootfs so the installer can seed the home partition
     if [ -d "$ROOTFS_DIR/etc/skel" ]; then
