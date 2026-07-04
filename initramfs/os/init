@@ -237,14 +237,15 @@ fi
 if [ -f "$CFG/fstab" ]; then
     mkdir -p /mnt/root/etc
     cp "$CFG/fstab" /mnt/root/etc/fstab
-    # Create the mount point so systemd doesn't have to
+    # Create mount points so systemd doesn't have to
+    mkdir -p /mnt/root/etc/larch-conf
     mkdir -p "/mnt/root/home/$USERNAME"
     chown 1000:1000 "/mnt/root/home/$USERNAME" 2>/dev/null || true
     chmod 0750      "/mnt/root/home/$USERNAME"  2>/dev/null || true
     # Mask home.mount — the fstab entry for /home/<username> replaces it
     mkdir -p /mnt/root/etc/systemd/system
     ln -sf /dev/null /mnt/root/etc/systemd/system/home.mount
-    log "  fstab: LARCHHOME → /home/$USERNAME"
+    log "  fstab: LARCHCONF → /etc/larch-conf, LARCHHOME → /home/$USERNAME"
 fi
 
 log "Config applied"

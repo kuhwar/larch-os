@@ -3,9 +3,11 @@
 
 ISO_MOUNT="/mnt/iso"
 OS_PART_SIZE="3GiB"
+CONF_PART_SIZE="512MiB"
 TARGET_DISK=""
 AUTO_YES=0
 MOUNT_OS="/run/larch-target-os"
+MOUNT_CONF="/run/larch-target-conf"
 MOUNT_HOME="/run/larch-target-home"
 
 LARCH_HOSTNAME=""
@@ -63,6 +65,7 @@ dialog --print-maxsize >/dev/null 2>&1 \
 
 cleanup() {
     umount "$MOUNT_OS"   2>/dev/null || true
+    umount "$MOUNT_CONF" 2>/dev/null || true
     umount "$MOUNT_HOME" 2>/dev/null || true
     # The dialog scratch file briefly holds the typed password — remove it.
     rm -f "$DIALOG_TMP" 2>/dev/null || true

@@ -17,10 +17,11 @@ The end product is an **atomic, image-based distro** where the entire OS is one 
 3. password
 4. target disk
 
-It then **wipes the target disk** and creates **two partitions**:
+It then **wipes the target disk** and creates **three partitions**:
 
 - **Partition 1 — boot/system.** Holds the bootloader, a tiny OS initramfs, `rootfs.squashfs` (the entire OS), and all per-machine configuration files (`fstab`, `passwd`, `shadow`, `hostname`, `hosts`, `username`, …).
-- **Partition 2 — home.** The user's `/home/<username>`, persistent across upgrades.
+- **Partition 2 — config.** Mutable, root-owned system config (`/etc/larch-conf`): NetworkManager connections, future CUPS/Bluetooth/etc. config. Never touched by upgrades.
+- **Partition 3 — home.** The user's `/home/<username>`, persistent across upgrades.
 
 **Atomic upgrade model.** A future OS version is shipped as a **new ISO**. Upgrading means replacing `initramfs.img` and `rootfs.squashfs` on partition 1 and **re-linking the existing configuration files** — `fstab`, password, hostname, user, etc. are preserved, not regenerated. The user partition is never touched. This makes upgrades atomic and trivially rollback-able, and keeps all machine state on partition 1's config files rather than baked into the OS image.
 
@@ -144,7 +145,7 @@ GRUB boots `vmlinuz` + `installer-initramfs.img`. Everything under `/larch-os/` 
 **Installer (`installer/install.sh`, bundled into the installer initramfs as `/usr/sbin/larch-install`)**:
 1. Verifies the ISO payload at `/mnt/iso/larch-os/`
 2. Prompts for hostname/username/password/target disk
-3. Partitions + formats, copies `initramfs.img` + `rootfs.squashfs` + `vmlinuz` + bootloader to LARCHOS, writes per-machine config, seeds LARCHHOME, then reboots
+3. Partitions + formats (3 partitions), copies `initramfs.img` + `rootfs.squashfs` + `vmlinuz` + bootloader to LARCHOS, writes per-machine config, seeds LARCHCONF (NM connections dir) and LARCHHOME, then reboots
 
 **OS initramfs (`initramfs/os/init`)** — busybox sh PID 1:
 1. Loads modules (squashfs/loop/overlay first, then storage/FAT drivers)
@@ -169,31 +170,31 @@ The installer writes these files to `LARCHOS:/larch-os/`:
 | `shadow` | single `/etc/shadow` line with SHA-512 hash |
 | `username` | plain username string (used by init to rename groups) |
 | `machine-id` | 32 hex digits — stable `/etc/machine-id`, generated once at install |
-| `fstab` | full `/etc/fstab` with `LABEL=LARCHHOME → /home/<username>` |
+| `fstab` | full `/etc/fstab` with `LABEL=LARCHCONF → /etc/larch-conf`, `LABEL=LARCHHOME → /home/<username>`, and NM bind mount |
 
 The OS init re-applies these on every boot into the tmpfs upper layer:
 - **passwd**: strips any UID-1000 line from the squashfs default, appends the installer entry
 - **shadow**: strips the default `larch:` entry, appends the hashed installer entry
 - **group**: `sed 's/\blarch\b/$USERNAME/g'` — renames group memberships to the installed username (word-boundary-safe)
 - **machine-id**: copies the installer value to `/etc/machine-id` (mode 0444). Without it, `/etc` being tmpfs means systemd would synthesise a *new* id every boot, so the machine would get a different DHCP lease/IP (the DHCP client-id / DHCPv6 DUID derive from machine-id) and a fresh journal identity on each boot. Generated once at install from the kernel UUID pool.
-- **fstab**: replaces `/etc/fstab`; the init also creates `/home/<username>` as a mount point (owned 1000:1000, mode 0750) and masks `home.mount` with a `/dev/null` symlink so `systemd-fstab-generator` takes over home mounting
+- **fstab**: replaces `/etc/fstab`; the init also creates `/etc/larch-conf` and `/home/<username>` as mount points (home: owned 1000:1000, mode 0750) and masks `home.mount` with a `/dev/null` symlink so `systemd-fstab-generator` takes over home mounting
 
-### `/home` persistence
+### `/home` and `/etc/larch-conf` persistence
 
-`/home` is not mounted in initramfs. On an installed system, systemd mounts `LABEL=LARCHHOME` via a `.mount` unit after `switch_root`.
+Neither LARCHHOME nor LARCHCONF is mounted in initramfs. On an installed system, systemd mounts them via the generated fstab after `switch_root`.
 
 ### WiFi / NetworkManager connection persistence
 
-NetworkManager stores connection profiles (WiFi SSIDs + secrets) as keyfiles in `/etc/NetworkManager/system-connections/` (root-owned, `0600`). That path lives in the tmpfs OverlayFS upper layer, so it would be **discarded on every reboot**. Since `/home` (LARCHHOME) is the only writable, persistent partition, connections are backed by it via a bind mount:
+NetworkManager stores connection profiles (WiFi SSIDs + secrets) as keyfiles in `/etc/NetworkManager/system-connections/` (root-owned, `0600`). That path lives in the tmpfs OverlayFS upper layer, so it would be **discarded on every reboot**. The LARCHCONF partition (`/etc/larch-conf`, ext4, root-owned) is the persistent store for system config; NM connections are backed by it via a bind mount:
 
-1. **Installer seeds the store** (`installer/install.sh`, home-seeding block): creates `/home/<username>/.larch/nm-system-connections` on LARCHHOME, root-owned, `.larch` `0755` and `nm-system-connections` `0700` — so WiFi secrets stay unreadable/undeletable by the user even though they sit under the user's home.
-2. **Installer-generated fstab adds a bind line**: `/home/<username>/.larch/nm-system-connections → /etc/NetworkManager/system-connections` (`bind,nofail`). `systemd-fstab-generator` auto-orders the bind mount after the `/home/<username>` mount.
+1. **Installer seeds the store** (`installer/install.sh`, config-seeding block): creates `nm-system-connections/` at the root of LARCHCONF, root-owned, `0700` — so WiFi secrets are unreadable/undeletable by the user.
+2. **Installer-generated fstab adds a bind line**: `/etc/larch-conf/nm-system-connections → /etc/NetworkManager/system-connections` (`bind,nofail`). `systemd-fstab-generator` auto-orders the bind mount after the `/etc/larch-conf` mount.
 3. **`rootfs-overlay/etc/systemd/system/NetworkManager.service.d/10-persist-connections.conf`** (static overlay drop-in) carries `RequiresMountsFor=/etc/NetworkManager/system-connections`, so NetworkManager waits for the bind mount before starting — otherwise it would write profiles into the tmpfs upper before persistence is wired up and lose them.
 
 Notes:
 - Only the **connection profiles** persist (enough to auto-reconnect). NM's volatile state in `/var/lib/NetworkManager/` (DHCP leases, seen-BSSID timestamps) still resets each boot — harmless for an immutable system.
 - **VPN configurations persist for free.** GNOME/NetworkManager VPN connections are stored as keyfiles in the same `/etc/NetworkManager/system-connections/` directory, so the bind mount above covers them too — no extra wiring. (VPNs needing an out-of-tree plugin still require that plugin in the squashfs.)
-- The fstab bind line is generated by the installer, so it only takes effect on a **fresh install**. An already-installed machine keeps its old fstab on LARCHOS and won't pick this up without a reinstall.
+- **Adding future persistent config** (CUPS, Bluetooth, etc.): seed the directory on LARCHCONF in the installer, add a bind mount line to the generated fstab, and add a `RequiresMountsFor` drop-in for the relevant service in `rootfs-overlay/`.
 - Rebuild after changing this: stage 3 (overlay drop-in) + stage 8 (installer). Note the cached rootfs has apt stripped, so use `--only 3` then `--stage 6` instead of `--stage 3` to avoid the failing chroot-configure stage.
 
 ### Bootloader configs
@@ -223,7 +224,10 @@ Partition 1 — FAT32, 3 GiB, label LARCHOS
   larch-os/machine-id
   larch-os/fstab
 
-Partition 2 — ext4, remainder, label LARCHHOME
+Partition 2 — ext4, 512 MiB, label LARCHCONF   (mounted at /etc/larch-conf)
+  nm-system-connections/    (bind-mounted over /etc/NetworkManager/system-connections)
+
+Partition 3 — ext4, remainder, label LARCHHOME
   <username>/               (seeded from /etc/skel at install time; persistent)
 ```
 
