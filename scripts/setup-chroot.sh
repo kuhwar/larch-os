@@ -33,6 +33,7 @@ cat > /etc/apt/sources.list <<'EOF'
 deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware
 deb http://deb.debian.org/debian trixie-updates main contrib non-free non-free-firmware
 deb http://security.debian.org/debian-security trixie-security main contrib non-free non-free-firmware
+deb http://deb.debian.org/debian trixie-backports main contrib non-free non-free-firmware
 EOF
 
 export DEBIAN_FRONTEND=noninteractive
@@ -43,6 +44,45 @@ log "Installing packages (this takes a while)"
 PKGS=$(grep -v '^#' /packages.list | grep -v '^[[:space:]]*$' | tr '\n' ' ')
 # shellcheck disable=SC2086
 apt-get install -y --no-install-recommends $PKGS
+
+# ── NVIDIA proprietary driver (from trixie-backports) ─────────────────────────
+# Pulled separately with `-t trixie-backports` so that whenever backports carries
+# a newer driver than main it is preferred. Today backports has 550.163.01 (same
+# upstream version as main, rebuilt for bpo13), so this currently installs 550 —
+# which already supports Pascal (e.g. GTX 1070 Ti). The pin is forward-looking:
+# if Debian backports a newer branch (e.g. 580.x, the last to support Pascal) a
+# rebuild upgrades to it with no change here. nvidia-kernel-dkms compiles the
+# module against linux-headers-amd64 (installed in the bulk step above);
+# clean-rootfs.sh strips the source tree afterward. See config/packages.list for
+# the modeset/Wayland notes.
+# Beyond nvidia-driver itself, list the Recommends that --no-install-recommends
+# would skip but that this image actually needs:
+#   libnvidia-allocator1 — the actual GBM backend: ships nvidia-drm_gbm.so
+#     (→ libnvidia-allocator.so), wired into /usr/lib/<triplet>/gbm/ via the
+#     alternatives system. Mesa's libgbm dlopens <gbm-dir>/nvidia-drm_gbm.so
+#     (named after the DRM driver); without it mutter cannot allocate buffers
+#     on the nvidia KMS device and the whole session silently renders on
+#     llvmpipe.
+#   libnvidia-egl-gbm1 — EGL external platform for GBM surfaces
+#     (15_nvidia_gbm.json); the other half of accelerated Wayland.
+#   nvidia-vulkan-icd  — Vulkan ICD for the card (games/apps via Flatpak).
+#   nvidia-smi         — driver diagnostics CLI.
+#   switcheroo-control — D-Bus GPU inventory; GNOME Settings' "Graphics" row
+#     reads it (shows "Unknown" without it). From main, not backports.
+#   nvidia-suspend-common — nvidia-sleep.sh + nvidia-suspend/resume/hibernate
+#     units. Without these, VRAM is lost across sleep and gnome-shell SIGABRTs
+#     on resume (broken fonts / missing top bar, then session restart). Needs
+#     NVreg_PreserveVideoMemoryAllocations=1 (rootfs-overlay/etc/modprobe.d/
+#     larch-nvidia.conf) and the services enabled below.
+#   kbd — fgconsole/chvt, called by nvidia-sleep.sh; not in the base image.
+log "Installing NVIDIA driver from trixie-backports"
+apt-get install -y --no-install-recommends -t trixie-backports \
+    nvidia-driver libnvidia-allocator1 libnvidia-egl-gbm1 nvidia-vulkan-icd \
+    nvidia-smi switcheroo-control nvidia-suspend-common kbd
+
+# Save/restore VRAM around sleep (units are WantedBy=systemd-suspend.service /
+# systemd-hibernate.service; enablement creates those .wants links).
+systemctl enable nvidia-suspend.service nvidia-resume.service nvidia-hibernate.service
 
 # ── Generate locale (now that `locales` + /usr/share/i18n are installed) ───────
 # Must run AFTER package install. The compiled archive lands in /usr/lib/locale

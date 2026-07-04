@@ -1,0 +1,74 @@
+# larch-os override of GDM's /usr/lib/udev/rules.d/61-gdm.rules
+# (a same-named file in /etc/udev/rules.d takes precedence over /usr/lib).
+#
+# Upstream's rule disables Wayland whenever the proprietary NVIDIA driver is
+# loaded unless the nvidia-suspend/resume/hibernate services are installed,
+# enabled, and NVreg_PreserveVideoMemoryAllocations=1 — machinery Debian ships
+# only as a Recommends that this image does not install. On larch-os that
+# check is fatal rather than a fallback: the image is Wayland-only (no
+# /usr/share/xsessions), so "disable Wayland" leaves GDM with zero sessions
+# and it aborts with g_error "no session desktop files installed" in a crash
+# loop (Debian bug #1109409). This copy keeps upstream's virtual-GPU
+# detection and the vendor-nvidia flag but drops the suspend-service checks.
+# Trade-off: suspend/resume with the NVIDIA driver may not restore the
+# session reliably (VRAM contents are not preserved across sleep).
+
+SUBSYSTEM!="pci", GOTO="gdm_pci_device_end"
+ACTION!="bind", ACTION!="add", GOTO="gdm_pci_device_end"
+
+# cirrus
+ATTR{vendor}=="0x1013", ATTR{device}=="0x00b8", ATTR{subsystem_vendor}=="0x1af4", ATTR{subsystem_device}=="0x1100", RUN+="/usr/bin/touch /run/udev/gdm-machine-has-virtual-gpu", ENV{GDM_MACHINE_HAS_VIRTUAL_GPU}="1", GOTO="gdm_pci_device_end"
+# virtio
+ATTR{vendor}=="0x1af4", ATTR{device}=="0x1050", ATTR{subsystem_vendor}=="0x1af4", ATTR{subsystem_device}=="0x1100", RUN+="/usr/bin/touch /run/udev/gdm-machine-has-virtual-gpu", ENV{GDM_MACHINE_HAS_VIRTUAL_GPU}="1", GOTO="gdm_pci_device_end"
+# qxl
+ATTR{vendor}=="0x1b36", ATTR{device}=="0x0100", RUN+="/usr/bin/touch /run/udev/gdm-machine-has-virtual-gpu", ENV{GDM_MACHINE_HAS_VIRTUAL_GPU}="1", GOTO="gdm_pci_device_end"
+# vga
+ATTR{vendor}=="0x1234", ATTR{device}=="0x1111", RUN+="/usr/bin/touch /run/udev/gdm-machine-has-virtual-gpu", ENV{GDM_MACHINE_HAS_VIRTUAL_GPU}="1", GOTO="gdm_pci_device_end"
+
+# disable Wayland on Hi1710 chipsets
+ATTR{vendor}=="0x19e5", ATTR{device}=="0x1711", GOTO="gdm_disable_wayland"
+
+LABEL="gdm_pci_device_end"
+
+# If this machine has a hardware GPU, take note
+KERNEL!="card[0-9]*", GOTO="gdm_hardware_gpu_end"
+KERNEL=="card[0-9]-*", GOTO="gdm_hardware_gpu_end"
+SUBSYSTEM!="drm", GOTO="gdm_hardware_gpu_end"
+DRIVERS=="simple-framebuffer", GOTO="gdm_hardware_gpu_end"
+IMPORT{parent}="GDM_MACHINE_HAS_VIRTUAL_GPU"
+ENV{GDM_MACHINE_HAS_VIRTUAL_GPU}!="1", RUN+="/usr/bin/touch /run/udev/gdm-machine-has-hardware-gpu"
+LABEL="gdm_hardware_gpu_end"
+
+# Note the vendor nvidia driver so GDM waits for its modules before starting.
+# (Upstream's suspend-service checks that followed here are intentionally
+# removed — see header.)
+KERNEL!="nvidia", GOTO="gdm_nvidia_end"
+SUBSYSTEM!="module", GOTO="gdm_nvidia_end"
+ACTION!="add", GOTO="gdm_nvidia_end"
+RUN+="/usr/bin/touch /run/udev/gdm-machine-has-vendor-nvidia-driver"
+LABEL="gdm_nvidia_end"
+
+# If this is a hybrid graphics setup, take note
+KERNEL!="card[1-9]*", GOTO="gdm_hybrid_graphics_check_end"
+KERNEL=="card[1-9]-*", GOTO="gdm_hybrid_graphics_check_end"
+SUBSYSTEM!="drm", GOTO="gdm_hybrid_graphics_check_end"
+ACTION!="add", GOTO="gdm_hybrid_graphics_check_end"
+IMPORT{program}="/bin/sh -c \"echo GDM_NUMBER_OF_GRAPHICS_CARDS=`ls -1d /sys/class/drm/card[0-9] | wc -l`\""
+ENV{GDM_NUMBER_OF_GRAPHICS_CARDS}=="1", RUN+="/usr/bin/rm -f /run/udev/gdm-machine-has-hybrid-graphics"
+ENV{GDM_NUMBER_OF_GRAPHICS_CARDS}!="1", RUN+="/usr/bin/touch /run/udev/gdm-machine-has-hybrid-graphics"
+LABEL="gdm_hybrid_graphics_check_end"
+
+# Disable wayland in situation where we're in a guest with a virtual gpu and host passthrough gpu
+TEST!="/run/udev/gdm-machine-has-hybrid-graphics", GOTO="gdm_virt_passthrough_check_end"
+TEST!="/run/udev/gdm-machine-has-virtual-gpu", GOTO="gdm_virt_passthrough_check_end"
+TEST!="/run/udev/gdm-machine-has-hardware-gpu", GOTO="gdm_virt_passthrough_check_end"
+GOTO="gdm_disable_wayland"
+LABEL="gdm_virt_passthrough_check_end"
+
+GOTO="gdm_end"
+
+LABEL="gdm_disable_wayland"
+RUN+="/usr/libexec/gdm-runtime-config set daemon WaylandEnable false"
+GOTO="gdm_end"
+
+LABEL="gdm_end"

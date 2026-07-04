@@ -527,8 +527,13 @@ run_stage 9 "assemble-iso — copy all files into ISO tree" && {
     EFI_BIN="$(find_efi_bin)"
     [ -f "$EFI_BIN" ] || die "systemd-boot EFI binary not found in rootfs"
     cp "$EFI_BIN" "$ISO_ROOT/EFI/BOOT/BOOTX64.EFI"
-    cp "$SCRIPT_DIR/bootloader/loader.conf"        "$ISO_ROOT/loader/loader.conf"
-    cp "$SCRIPT_DIR/bootloader/entries/larch.conf" "$ISO_ROOT/loader/entries/larch.conf"
+    cp "$SCRIPT_DIR/bootloader/loader.conf"              "$ISO_ROOT/loader/loader.conf"
+    cp "$SCRIPT_DIR/bootloader/entries/larch.conf"       "$ISO_ROOT/loader/entries/larch.conf"
+    # Second, non-default entry: verbose console logging for diagnosing boot
+    # failures (larch.debug keeps init output on /dev/console; quiet/splash and
+    # the systemd/udev status suppressors are dropped). Not the default — the
+    # menu stays hidden behind timeout 0; hold a key (Space) at power-on to pick.
+    cp "$SCRIPT_DIR/bootloader/entries/larch-debug.conf" "$ISO_ROOT/loader/entries/larch-debug.conf"
 
     # /etc/skel — seeded into home partition at install time
     cp -a "$ROOTFS_DIR/etc/skel/." "$ISO_ROOT/skel/" 2>/dev/null || true
