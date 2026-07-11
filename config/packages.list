@@ -106,6 +106,30 @@ wpasupplicant
 wireless-tools
 iw
 
+# ── Bluetooth ────────────────────────────────────────────────────────────────
+bluez
+
+# ── Printing ─────────────────────────────────────────────────────────────────
+# cups: full CUPS metapackage (daemon + client + common). printer-driver-all:
+# broad driver coverage (gutenprint, foomatic, hpijs, splix, ...) matching the
+# "broad hardware coverage" approach already used for WiFi firmware below.
+# cups-pk-helper: polkit-mediated admin actions — what GNOME Settings' Printers
+# panel uses to add/remove/configure queues without a root password (see the
+# polkit rule in rootfs-overlay/etc/polkit-1/rules.d/99-larch-cups.rules).
+# avahi-daemon: DNS-SD discovery so network/AirPrint printers show up in the
+# "Add Printer" dialog. ipp-usb: driverless IPP-over-USB support for modern
+# (2015+) USB printers. system-config-printer: gnome-control-center's printer
+# panel talks to its D-Bus service (org.fedoraproject.Config.Printing) during
+# add-printer to group duplicate discovered devices — without it, adding any
+# printer fails outright (GDBus ServiceUnknown), even though the GUI itself is
+# unused; only the daemon side of this package is needed.
+cups
+cups-pk-helper
+printer-driver-all
+avahi-daemon
+ipp-usb
+system-config-printer
+
 # ── Fonts ────────────────────────────────────────────────────────────────────
 fonts-noto
 fonts-noto-color-emoji

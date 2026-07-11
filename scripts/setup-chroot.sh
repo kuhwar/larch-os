@@ -111,6 +111,9 @@ usermod -aG audio,video,input,netdev,plugdev larch
 log "Enabling systemd services"
 systemctl enable gdm3
 systemctl enable NetworkManager
+systemctl enable bluetooth
+systemctl enable cups
+systemctl enable avahi-daemon
 systemctl set-default graphical.target
 
 # Disable services that conflict with immutability
@@ -201,6 +204,25 @@ dhcp=internal
 [device]
 wifi.scan-rand-mac-address=yes
 EOF
+
+# ── CUPS: redirect printer state onto a single persistable directory ─────────
+# printers.conf/classes.conf/subscriptions.conf/ppd/ hold the actual configured
+# print queues; cupsd.conf/cups-files.conf/mime.types/snmp.conf/client.conf are
+# static package config. Only the former should survive an OS image upgrade, so
+# instead of persisting all of /etc/cups (which would freeze the daemon config
+# at install time), redirect just the queue state to /etc/cups/larch-state via
+# symlinks and bind-mount *that* directory from LARCHCONF (installer + fstab
+# line; see installer/install.sh and 10-persist-printers.conf below). This
+# mirrors the /etc/NetworkManager/system-connections pattern: only user/runtime
+# generated content is persisted, package-shipped config always comes fresh
+# from the image.
+log "Redirecting CUPS printer state to /etc/cups/larch-state"
+rm -f /etc/cups/printers.conf /etc/cups/classes.conf /etc/cups/subscriptions.conf
+rm -rf /etc/cups/ppd
+ln -s larch-state/printers.conf      /etc/cups/printers.conf
+ln -s larch-state/classes.conf       /etc/cups/classes.conf
+ln -s larch-state/subscriptions.conf /etc/cups/subscriptions.conf
+ln -s larch-state/ppd                /etc/cups/ppd
 
 # ── Kernel / initramfs: stub (real initramfs is built externally) ─────────────
 # Just make sure the vmlinuz symlink is resolvable

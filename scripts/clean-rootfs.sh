@@ -30,6 +30,11 @@ rm -rf \
     /etc/dpkg
 
 # ── Remove package manager leftovers ─────────────────────────────────────────
+# NOTE: the python3 interpreter itself (/usr/bin/python3*) is NOT removed here
+# — system-config-printer's scp-dbus-service.py (org.fedoraproject.Config.Printing,
+# used by GNOME Settings' printer panel) needs a real python3 at runtime. Only
+# the apt/dpkg python bindings are stripped, same as python3-apt/python3-debian
+# above.
 log "Removing package manager related files"
 rm -rf \
     /usr/share/doc \
@@ -39,7 +44,6 @@ rm -rf \
     /usr/share/i18n \
     /usr/lib/python3/dist-packages/apt* \
     /usr/lib/python3/dist-packages/debian* \
-    /usr/bin/python3* \
     2>/dev/null || true
 
 # Keep en_US locale only

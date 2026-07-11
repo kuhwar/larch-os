@@ -183,19 +183,28 @@ The OS init re-applies these on every boot into the tmpfs upper layer:
 
 Neither LARCHHOME nor LARCHCONF is mounted in initramfs. On an installed system, systemd mounts them via the generated fstab after `switch_root`.
 
-### WiFi / NetworkManager connection persistence
+### Persistent system config on LARCHCONF (WiFi, Bluetooth, printing)
 
-NetworkManager stores connection profiles (WiFi SSIDs + secrets) as keyfiles in `/etc/NetworkManager/system-connections/` (root-owned, `0600`). That path lives in the tmpfs OverlayFS upper layer, so it would be **discarded on every reboot**. The LARCHCONF partition (`/etc/larch-conf`, ext4, root-owned) is the persistent store for system config; NM connections are backed by it via a bind mount:
+Several daemons keep their state under `/etc` or `/var`, both of which live in the tmpfs OverlayFS upper layer — anything they write there would be **discarded on every reboot**. The LARCHCONF partition (`/etc/larch-conf`, ext4, root-owned) is the persistent store for this kind of system config; each service is backed by it via a bind mount, following the same three-part pattern:
 
-1. **Installer seeds the store** (`installer/install.sh`, config-seeding block): creates `nm-system-connections/` at the root of LARCHCONF, root-owned, `0700` — so WiFi secrets are unreadable/undeletable by the user.
-2. **Installer-generated fstab adds a bind line**: `/etc/larch-conf/nm-system-connections → /etc/NetworkManager/system-connections` (`bind,nofail`). `systemd-fstab-generator` auto-orders the bind mount after the `/etc/larch-conf` mount.
-3. **`rootfs-overlay/etc/systemd/system/NetworkManager.service.d/10-persist-connections.conf`** (static overlay drop-in) carries `RequiresMountsFor=/etc/NetworkManager/system-connections`, so NetworkManager waits for the bind mount before starting — otherwise it would write profiles into the tmpfs upper before persistence is wired up and lose them.
+1. **Installer seeds the store** (`installer/install.sh`, config-seeding block): creates a root-owned, `0700` directory at the root of LARCHCONF for the service.
+2. **Installer-generated fstab adds a bind line** from that LARCHCONF directory onto the service's live state path (`bind,nofail`, plus `x-systemd.mkdir` where the target isn't guaranteed to already exist). `systemd-fstab-generator` auto-orders the bind mount after the `/etc/larch-conf` mount.
+3. **A static `RequiresMountsFor` drop-in in `rootfs-overlay/etc/systemd/system/<service>.service.d/`** holds the service until its bind mount is ready — otherwise it could write state into the tmpfs upper before persistence is wired up and lose it on reboot.
+
+Three services currently use this pattern:
+
+| Service | LARCHCONF dir | Bind target | Drop-in |
+|---|---|---|---|
+| NetworkManager | `nm-system-connections/` | `/etc/NetworkManager/system-connections` | `NetworkManager.service.d/10-persist-connections.conf` |
+| bluetoothd | `bluetooth/` | `/var/lib/bluetooth` | `bluetooth.service.d/10-persist-devices.conf` |
+| cupsd | `cups/` | `/etc/cups/larch-state` | `cups.service.d/10-persist-printers.conf` |
 
 Notes:
-- Only the **connection profiles** persist (enough to auto-reconnect). NM's volatile state in `/var/lib/NetworkManager/` (DHCP leases, seen-BSSID timestamps) still resets each boot — harmless for an immutable system.
-- **VPN configurations persist for free.** GNOME/NetworkManager VPN connections are stored as keyfiles in the same `/etc/NetworkManager/system-connections/` directory, so the bind mount above covers them too — no extra wiring. (VPNs needing an out-of-tree plugin still require that plugin in the squashfs.)
-- **Adding future persistent config** (CUPS, Bluetooth, etc.): seed the directory on LARCHCONF in the installer, add a bind mount line to the generated fstab, and add a `RequiresMountsFor` drop-in for the relevant service in `rootfs-overlay/`.
-- Rebuild after changing this: stage 3 (overlay drop-in) + stage 8 (installer). Note the cached rootfs has apt stripped, so use `--only 3` then `--stage 6` instead of `--stage 3` to avoid the failing chroot-configure stage.
+- **NetworkManager**: only the **connection profiles** persist (enough to auto-reconnect). NM's volatile state in `/var/lib/NetworkManager/` (DHCP leases, seen-BSSID timestamps) still resets each boot — harmless for an immutable system. **VPN configurations persist for free** — GNOME/NetworkManager VPN connections are stored as keyfiles in the same `system-connections/` directory, so the bind mount covers them too (VPNs needing an out-of-tree plugin still require that plugin in the squashfs).
+- **Bluetooth**: `/var/lib/bluetooth` holds per-adapter pairing keys and device info; bluez doesn't ship this directory by default, hence `x-systemd.mkdir` on the fstab line.
+- **Printing (CUPS)**: only queue *state* persists — `printers.conf`, `classes.conf`, `subscriptions.conf`, and `ppd/` — not the daemon's static config (`cupsd.conf`, `cups-files.conf`, `mime.types`, `snmp.conf`, `client.conf`), which should always come fresh from the image on upgrade. `scripts/setup-chroot.sh` symlinks those four state paths to `larch-state/...` inside `/etc/cups/`, and LARCHCONF's `cups/` directory is bind-mounted onto `/etc/cups/larch-state` (not directly onto `/etc/cups`) so the daemon config stays image-owned. GNOME Settings' Printers panel talks to cupsd via `cups-pk-helper`'s polkit actions (`org.opensuse.cupspkhelper.mechanism.*`); since root is locked and there's no admin/sudo group, `rootfs-overlay/etc/polkit-1/rules.d/99-larch-cups.rules` grants those to the active local session, mirroring `99-larch-flatpak.rules`.
+- **Adding future persistent config**: follow the same three-part pattern above. If the service's state files aren't isolated to one directory (like CUPS), symlink them into a dedicated subdirectory in `scripts/setup-chroot.sh` (after the package installs, so it isn't clobbered by dpkg) rather than persisting the whole config tree.
+- Rebuild after changing this: stage 3 (overlay drop-ins) + stage 4 (setup-chroot.sh changes, e.g. CUPS symlinks) + stage 8 (installer). Note the cached rootfs has apt stripped, so a drop-in-only change should use `--only 3` then `--stage 6` instead of `--stage 3`, to avoid the failing chroot-configure stage.
 
 ### Bootloader configs
 
@@ -226,6 +235,8 @@ Partition 1 — FAT32, 3 GiB, label LARCHOS
 
 Partition 2 — ext4, 512 MiB, label LARCHCONF   (mounted at /etc/larch-conf)
   nm-system-connections/    (bind-mounted over /etc/NetworkManager/system-connections)
+  bluetooth/                (bind-mounted over /var/lib/bluetooth)
+  cups/                     (bind-mounted over /etc/cups/larch-state)
 
 Partition 3 — ext4, remainder, label LARCHHOME
   <username>/               (seeded from /etc/skel at install time; persistent)
