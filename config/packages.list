@@ -44,6 +44,8 @@ ca-certificates
 openssl
 login
 passwd
+# Dictionary for libpwquality — without it GNOME Settings rejects every password
+cracklib-runtime
 adduser
 locales
 
