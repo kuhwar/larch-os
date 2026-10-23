@@ -37,6 +37,18 @@ find_larchos_part() {
     return 1
 }
 
+# Echo the /dev path of the LARCHCONF partition on a disk (sysfs name), or
+# nothing. Reads the ext4 superblock volume label (offset 1024 + 120, 16 bytes).
+find_larchconf_part() {
+    for _pp in /sys/block/"$1"/"$1"*/partition; do
+        [ -f "$_pp" ] || continue
+        _pn=$(basename "$(dirname "$_pp")")
+        _lbl=$(dd if="/dev/$_pn" bs=1 skip=1144 count=16 2>/dev/null | tr -d '\000')
+        if [ "$_lbl" = "LARCHCONF" ]; then echo "/dev/$_pn"; return 0; fi
+    done
+    return 1
+}
+
 # dialog --menu of installable disks; selection (a /dev path) lands in TARGET_DISK.
 # Disks that already carry a larch-os install are marked and listed first, with the
 # first such disk pre-selected so updating an existing install is the happy path.

@@ -61,6 +61,12 @@ load_mod vfat
 load_mod nls_utf8
 load_mod nls_cp437
 load_mod nls_ascii
+# ext4 — to read the account files from LARCHCONF
+load_mod crc16
+load_mod crc32c_generic
+load_mod mbcache
+load_mod jbd2
+load_mod ext4
 
 load_mod virtio
 load_mod virtio_ring
@@ -203,22 +209,41 @@ if [ -f "$CFG/username" ]; then
 fi
 log "  username: $USERNAME"
 
+# Account files (passwd/shadow) live on LARCHCONF (ext4, root-only), not on
+# FAT32 LARCHOS where any mounter could read the hash. Mount it read-only just
+# long enough to read them; systemd mounts it read-write later via fstab, and
+# larch-persist-accounts.path writes password changes back to it.
+# Fall back to LARCHOS for installs that predate the move (and dev disks).
+ACCT="$CFG"
+mkdir -p /mnt/larchconf
+_conf="$(findfs LABEL=LARCHCONF 2>/dev/null || true)"
+if [ -n "$_conf" ] && mount -r -t ext4 "$_conf" /mnt/larchconf 2>/dev/null; then
+    if [ -f /mnt/larchconf/accounts/passwd ] && [ -f /mnt/larchconf/accounts/shadow ]; then
+        ACCT="/mnt/larchconf/accounts"
+    fi
+fi
+unset _conf
+log "  accounts: $ACCT"
+
 # /etc/passwd — replace any UID-1000 line from the squashfs default with the
 # installer-supplied entry (which has the correct username).
-if [ -f "$CFG/passwd" ]; then
+if [ -f "$ACCT/passwd" ]; then
     mkdir -p /mnt/root/etc
     grep -v '^[^:]*:[^:]*:1000:' /mnt/squashfs/etc/passwd > /mnt/root/etc/passwd || true
-    cat "$CFG/passwd" >> /mnt/root/etc/passwd
+    cat "$ACCT/passwd" >> /mnt/root/etc/passwd
 fi
 
 # /etc/shadow — remove any default "larch" line and the installer username line,
 # then append the hashed entry from the installer.
-if [ -f "$CFG/shadow" ]; then
+if [ -f "$ACCT/shadow" ]; then
     mkdir -p /mnt/root/etc
     grep -v "^larch:\|^${USERNAME}:" /mnt/squashfs/etc/shadow > /mnt/root/etc/shadow || true
-    cat "$CFG/shadow" >> /mnt/root/etc/shadow
+    cat "$ACCT/shadow" >> /mnt/root/etc/shadow
     chmod 640 /mnt/root/etc/shadow
 fi
+
+# Release LARCHCONF so systemd-fsck can check it before mounting it read-write.
+umount /mnt/larchconf 2>/dev/null || true
 
 # /etc/group — rename the default "larch" user entries to the installed username.
 if [ "$USERNAME" != "larch" ]; then
@@ -230,27 +255,28 @@ if [ "$USERNAME" != "larch" ]; then
     rm -rf "/mnt/root/home/larch" 2>/dev/null || true
 fi
 
-# /etc/fstab — mounts LARCHHOME at /home/<username>
-# The installer generates a fstab with a username-specific mount point.
-# We also create the mount point directory and mask the generic home.mount
-# unit (which mounts at /home) so systemd-fstab-generator takes over.
+# /etc/fstab — mounts LARCHHOME at /home
+# The installer generates a fstab with the home partition mounted at /home
+# (the user's home directory is /home/<username> inside that partition).
+# systemd-fstab-generator turns this entry into home.mount after switch_root.
 if [ -f "$CFG/fstab" ]; then
     mkdir -p /mnt/root/etc
     cp "$CFG/fstab" /mnt/root/etc/fstab
     # Create mount points so systemd doesn't have to
     mkdir -p /mnt/root/etc/larch-conf
+    # Fallback home dir in the tmpfs upper layer — only visible if LARCHHOME
+    # is absent (the nofail fstab entry skips the mount); otherwise the
+    # /home mount hides it. Keeps login working without the partition.
     mkdir -p "/mnt/root/home/$USERNAME"
     chown 1000:1000 "/mnt/root/home/$USERNAME" 2>/dev/null || true
     chmod 0750      "/mnt/root/home/$USERNAME"  2>/dev/null || true
-    # Mask home.mount — the fstab entry for /home/<username> replaces it
-    mkdir -p /mnt/root/etc/systemd/system
-    ln -sf /dev/null /mnt/root/etc/systemd/system/home.mount
-    log "  fstab: LARCHCONF → /etc/larch-conf, LARCHHOME → /home/$USERNAME"
+    log "  fstab: LARCHCONF → /etc/larch-conf, LARCHHOME → /home"
 fi
 
 log "Config applied"
 
-# /home (LABEL=LARCHHOME) is mounted by systemd via home.mount after switch_root.
+# /home (LABEL=LARCHHOME) is mounted by systemd via home.mount (generated
+# from /etc/fstab) after switch_root.
 
 # ── Move pseudo-filesystems and switch root ───────────────────────────────────
 

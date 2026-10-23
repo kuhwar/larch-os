@@ -1,0 +1,44 @@
+#!/bin/sh
+# larch-persist-accounts — copy the user's passwd/shadow entries to LARCHCONF.
+#
+# /etc lives in the tmpfs overlay, so a password change (passwd, GNOME Settings
+# via AccountsService) is lost on reboot unless written back here. The OS init
+# reads /etc/larch-conf/accounts/{passwd,shadow} on every boot and merges them
+# into /etc. Triggered by larch-persist-accounts.path.
+#
+# Only the single UID-1000 user is copied — system accounts come from the image.
+set -eu
+
+DEST=/etc/larch-conf/accounts
+
+if ! mountpoint -q /etc/larch-conf; then
+    echo "LARCHCONF not mounted at /etc/larch-conf; not persisting" >&2
+    exit 0
+fi
+
+pw_line=$(awk -F: '$3 == 1000 { print; exit }' /etc/passwd)
+[ -n "$pw_line" ] || { echo "no UID-1000 entry in /etc/passwd" >&2; exit 1; }
+user=${pw_line%%:*}
+sh_line=$(awk -F: -v u="$user" '$1 == u { print; exit }' /etc/shadow)
+[ -n "$sh_line" ] || { echo "no /etc/shadow entry for $user" >&2; exit 1; }
+
+mkdir -p "$DEST"
+chmod 0700 "$DEST"
+
+# write <name> <line> <mode> — atomic replace (temp file + rename), skipped if
+# unchanged, so a crash mid-write can't leave a truncated file.
+write() {
+    if [ -f "$DEST/$1" ] && [ "$(cat "$DEST/$1")" = "$2" ]; then
+        return 0
+    fi
+    _tmp=$(mktemp "$DEST/.$1.XXXXXX")
+    printf '%s\n' "$2" > "$_tmp"
+    chmod "$3" "$_tmp"
+    sync "$_tmp"
+    mv -f "$_tmp" "$DEST/$1"
+    sync "$DEST"
+    echo "persisted $1 for $user"
+}
+
+write passwd "$pw_line" 0644
+write shadow "$sh_line" 0600

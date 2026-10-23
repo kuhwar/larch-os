@@ -19,9 +19,9 @@ The end product is an **atomic, image-based distro** where the entire OS is one 
 
 It then **wipes the target disk** and creates **three partitions**:
 
-- **Partition 1 — boot/system.** Holds the bootloader, a tiny OS initramfs, `rootfs.squashfs` (the entire OS), and all per-machine configuration files (`fstab`, `passwd`, `shadow`, `hostname`, `hosts`, `username`, …).
-- **Partition 2 — config.** Mutable, root-owned system config (`/etc/larch-conf`): NetworkManager connections, future CUPS/Bluetooth/etc. config. Never touched by upgrades.
-- **Partition 3 — home.** The user's `/home/<username>`, persistent across upgrades.
+- **Partition 1 — boot/system.** Holds the bootloader, a tiny OS initramfs, `rootfs.squashfs` (the entire OS), and the per-machine configuration files (`fstab`, `hostname`, `hosts`, `username`, `machine-id`).
+- **Partition 2 — config.** Mutable, root-owned system config (`/etc/larch-conf`): the user account files (`passwd`/`shadow`, root-only), NetworkManager connections, Bluetooth pairings, CUPS queues. Never touched by upgrades.
+- **Partition 3 — home.** Mounted at `/home`; the user's home directory is `/home/<username>`, persistent across upgrades.
 
 **Atomic upgrade model.** A future OS version is shipped as a **new ISO**. Upgrading means replacing `initramfs.img` and `rootfs.squashfs` on partition 1 and **re-linking the existing configuration files** — `fstab`, password, hostname, user, etc. are preserved, not regenerated. The user partition is never touched. This makes upgrades atomic and trivially rollback-able, and keeps all machine state on partition 1's config files rather than baked into the OS image.
 
@@ -166,22 +166,31 @@ The installer writes these files to `LARCHOS:/larch-os/`:
 |---|---|
 | `hostname` | plain hostname string |
 | `hosts` | `/etc/hosts` content |
-| `passwd` | single `/etc/passwd` line for UID 1000 |
-| `shadow` | single `/etc/shadow` line with SHA-512 hash |
 | `username` | plain username string (used by init to rename groups) |
 | `machine-id` | 32 hex digits — stable `/etc/machine-id`, generated once at install |
-| `fstab` | full `/etc/fstab` with `LABEL=LARCHCONF → /etc/larch-conf`, `LABEL=LARCHHOME → /home/<username>`, and NM bind mount |
+| `fstab` | full `/etc/fstab` with `LABEL=LARCHCONF → /etc/larch-conf`, `LABEL=LARCHHOME → /home`, and NM bind mount |
+
+The account files go to `LARCHCONF:/accounts/` instead (dir `0700`, root-owned) — FAT32 has no permissions, so a `shadow` on LARCHOS would be readable by anyone who mounts the disk:
+
+| File | Content |
+|---|---|
+| `accounts/passwd` | single `/etc/passwd` line for UID 1000 (mode 0644) |
+| `accounts/shadow` | single `/etc/shadow` line with SHA-512 hash (mode 0600) |
+
+The OS init mounts LARCHCONF **read-only** (`findfs LABEL=LARCHCONF`, ext4 modules loaded) just to read these, then unmounts it before `switch_root` so `systemd-fsck` can check it. If LARCHCONF or `accounts/` is missing, it falls back to `LARCHOS:/larch-os/{passwd,shadow}` (pre-move installs, `make-dev-disk.sh` disks). The installer's **update** path migrates those LARCHOS copies into `LARCHCONF:/accounts/` and deletes them from LARCHOS.
+
+**Password changes persist via write-back**, not via links: `larch-persist-accounts.path` watches `/etc/passwd` and `/etc/shadow` (tmpfs) and runs `/usr/libexec/larch-persist-accounts`, which copies the UID-1000 lines to `/etc/larch-conf/accounts/` (atomic temp+rename, skipped if unchanged). This covers `passwd`, GNOME Settings (AccountsService → `usermod`) and full-name changes. Symlinking or bind-mounting `/etc/shadow` onto LARCHCONF does **not** work — tested on Trixie: `passwd`/`chpasswd` replace the symlink via rename, and `usermod` refuses a symlinked `/etc/passwd` (`cannot open /etc/passwd`).
 
 The OS init re-applies these on every boot into the tmpfs upper layer:
 - **passwd**: strips any UID-1000 line from the squashfs default, appends the installer entry
 - **shadow**: strips the default `larch:` entry, appends the hashed installer entry
 - **group**: `sed 's/\blarch\b/$USERNAME/g'` — renames group memberships to the installed username (word-boundary-safe)
 - **machine-id**: copies the installer value to `/etc/machine-id` (mode 0444). Without it, `/etc` being tmpfs means systemd would synthesise a *new* id every boot, so the machine would get a different DHCP lease/IP (the DHCP client-id / DHCPv6 DUID derive from machine-id) and a fresh journal identity on each boot. Generated once at install from the kernel UUID pool.
-- **fstab**: replaces `/etc/fstab`; the init also creates `/etc/larch-conf` and `/home/<username>` as mount points (home: owned 1000:1000, mode 0750) and masks `home.mount` with a `/dev/null` symlink so `systemd-fstab-generator` takes over home mounting
+- **fstab**: replaces `/etc/fstab`; `systemd-fstab-generator` turns the `LABEL=LARCHHOME → /home` entry into `home.mount`. The init also creates the `/etc/larch-conf` mount point and a fallback `/home/<username>` dir in the tmpfs upper layer (owned 1000:1000, mode 0750) — visible only if LARCHHOME is absent, since the mounted partition hides it otherwise
 
 ### `/home` and `/etc/larch-conf` persistence
 
-Neither LARCHHOME nor LARCHCONF is mounted in initramfs. On an installed system, systemd mounts them via the generated fstab after `switch_root`.
+LARCHHOME is not mounted in initramfs, and LARCHCONF only briefly read-only (for the account files, see above). On an installed system, systemd mounts them via the generated fstab after `switch_root`.
 
 ### Persistent system config on LARCHCONF (WiFi, Bluetooth, printing)
 
@@ -227,19 +236,18 @@ Partition 1 — FAT32, 3 GiB, label LARCHOS
   larch-os/rootfs.squashfs  (OS root filesystem, loop-mounted at boot)
   larch-os/hostname
   larch-os/hosts
-  larch-os/passwd
-  larch-os/shadow
   larch-os/username
   larch-os/machine-id
   larch-os/fstab
 
 Partition 2 — ext4, 512 MiB, label LARCHCONF   (mounted at /etc/larch-conf)
+  accounts/passwd, shadow   (user account; read by OS init, written back by larch-persist-accounts)
   nm-system-connections/    (bind-mounted over /etc/NetworkManager/system-connections)
   bluetooth/                (bind-mounted over /var/lib/bluetooth)
   cups/                     (bind-mounted over /etc/cups/larch-state)
 
-Partition 3 — ext4, remainder, label LARCHHOME
-  <username>/               (seeded from /etc/skel at install time; persistent)
+Partition 3 — ext4, remainder, label LARCHHOME   (mounted at /home)
+  <username>/               (the user's home, seeded from /etc/skel at install time; persistent)
 ```
 
 ## Key files and their roles

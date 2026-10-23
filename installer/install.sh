@@ -22,7 +22,8 @@
 #
 # Clean install writes to LARCHOS:
 #   vmlinuz · initramfs.img · bootloader · per-machine config
-#   (hostname, hosts, passwd, shadow, username, machine-id, fstab)
+#   (hostname, hosts, username, machine-id, fstab)
+# and to LARCHCONF: accounts/passwd · accounts/shadow (root-only)
 
 set -e
 
@@ -145,7 +146,7 @@ printf '%s:x:1000:1000:%s:/home/%s:/bin/bash\n' \
 
 # busybox mkpasswd is statically linked and always available in the initramfs.
 # openssl passwd -6 is a fallback (dynamically linked; requires libraries).
-pw_hash=$(busybox mkpasswd -m sha-512 "$LARCH_PASSWORD" 2>/dev/null) || true
+pw_hash=$(busybox mkpasswd -m sha512 "$LARCH_PASSWORD" 2>/dev/null) || true
 [ -n "$pw_hash" ] || \
     pw_hash=$(printf '%s' "$LARCH_PASSWORD" | openssl passwd -6 -stdin 2>/dev/null) || true
 [ -n "$pw_hash" ] || die "Password hashing failed (tried busybox mkpasswd and openssl passwd -6)"
@@ -170,8 +171,10 @@ printf 'tmpfs\t\t\t/run\t\ttmpfs\tdefaults,nosuid,nodev\t\t0\t0\n'           >> 
 # device store, CUPS printer state)
 printf 'LABEL=LARCHCONF\t\t/etc/larch-conf\text4\tdefaults,relatime,nofail\t0\t2\n' \
                                                                                >> "$CONFIG_TMP/fstab"
-printf 'LABEL=LARCHHOME\t\t/home/%s\text4\tdefaults,relatime,nofail\t0\t2\n' \
-    "$LARCH_USERNAME"                                                          >> "$CONFIG_TMP/fstab"
+# LARCHHOME is mounted at /home; the user's home directory lives at
+# /home/<username> inside that partition (seeded below from /etc/skel).
+printf 'LABEL=LARCHHOME\t\t/home\t\text4\tdefaults,relatime,nofail\t0\t2\n' \
+                                                                               >> "$CONFIG_TMP/fstab"
 # Persist NetworkManager system connections on LARCHCONF.
 # fstab-generator orders this bind after the /etc/larch-conf mount;
 # NetworkManager.service waits for it via a RequiresMountsFor drop-in in the rootfs overlay.
@@ -239,12 +242,10 @@ show_step "Writing installation config to LARCHOS"
 DEST="$MOUNT_OS/larch-os"
 cp "$CONFIG_TMP/hostname"   "$DEST/hostname"
 cp "$CONFIG_TMP/hosts"      "$DEST/hosts"
-cp "$CONFIG_TMP/passwd"     "$DEST/passwd"
-cp "$CONFIG_TMP/shadow"     "$DEST/shadow"
 cp "$CONFIG_TMP/username"   "$DEST/username"
 cp "$CONFIG_TMP/machine-id" "$DEST/machine-id"
 cp "$CONFIG_TMP/fstab"      "$DEST/fstab"
-chmod 640 "$DEST/shadow"
+# passwd/shadow go to LARCHCONF below — FAT32 can't make the hash root-only.
 
 sync
 umount "$MOUNT_OS"
@@ -259,6 +260,10 @@ mkfs.ext4 -F -L LARCHCONF -m 0 "$PART2" >/dev/null 2>&1
 mount_or_die ext4 "$PART2" "$MOUNT_CONF"
 
 show_step "Seeding config partition"
+# Account files: the OS init reads them at boot, larch-persist-accounts.path
+# writes password changes back. shadow is root-only, unlike on FAT32 LARCHOS.
+seed_accounts "$MOUNT_CONF" "$CONFIG_TMP/passwd" "$CONFIG_TMP/shadow"
+
 # Root-owned 0700 so WiFi secrets are unreadable/undeletable by the user.
 mkdir -p "$MOUNT_CONF/nm-system-connections"
 chown 0:0 "$MOUNT_CONF/nm-system-connections"
@@ -293,10 +298,17 @@ mkfs.ext4 -F -L LARCHHOME -m 0 "$PART3" >/dev/null 2>&1
 mount_or_die ext4 "$PART3" "$MOUNT_HOME"
 
 show_step "Seeding home partition for $LARCH_USERNAME"
-cp -a /mnt/iso/skel/. "$MOUNT_HOME/" 2>/dev/null || true
-chown -R 1000:1000 "$MOUNT_HOME"
+# The partition is mounted at /home; seed the user's home into /home/<username>.
+mkdir -p "$MOUNT_HOME/$LARCH_USERNAME"
+cp -a /mnt/iso/skel/. "$MOUNT_HOME/$LARCH_USERNAME/" 2>/dev/null || true
+# ISO9660 files are read-only (0444); cp -a carries that over, so restore
+# owner-write on the seeded dotfiles.
+chmod -R u+w "$MOUNT_HOME/$LARCH_USERNAME"
+chown -R 1000:1000 "$MOUNT_HOME/$LARCH_USERNAME"
+chmod 0750 "$MOUNT_HOME/$LARCH_USERNAME"
+chown 0:0 "$MOUNT_HOME"
+chmod 0755 "$MOUNT_HOME"
 chown 0:0 "$MOUNT_HOME/lost+found" 2>/dev/null || true
-chmod 0750 "$MOUNT_HOME"
 
 sync
 umount "$MOUNT_HOME"

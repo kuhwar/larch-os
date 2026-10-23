@@ -1,0 +1,16 @@
+# Write user account changes (password, full name) back to LARCHCONF.
+#
+# /etc/passwd and /etc/shadow live in the tmpfs overlay; the OS init seeds them
+# on every boot from /etc/larch-conf/accounts/. Watching them here and copying
+# the user's entries back makes `passwd` and GNOME Settings changes persist.
+# (Symlinking /etc/shadow to LARCHCONF doesn't work: passwd/chpasswd replace the
+# symlink via rename, and usermod refuses to open a symlinked /etc/passwd.)
+[Unit]
+Description=Watch user account files for changes to persist to LARCHCONF
+
+[Path]
+PathChanged=/etc/passwd
+PathChanged=/etc/shadow
+
+[Install]
+WantedBy=paths.target

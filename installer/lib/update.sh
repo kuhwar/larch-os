@@ -52,6 +52,24 @@ do_update() {
     cp "$ISO_MOUNT/larch-os/rootfs.squashfs" "$MOUNT_OS/larch-os/rootfs.squashfs"
     sync
 
+    # Older installs kept passwd/shadow on LARCHOS (FAT32, hash readable by
+    # anyone who mounts it). Move them to LARCHCONF's root-only accounts/ dir,
+    # unless LARCHCONF already has them. Without a LARCHCONF partition they stay
+    # put — the OS init falls back to reading them from LARCHOS.
+    _confdev=$(find_larchconf_part "$(basename "$TARGET_DISK")" || true)
+    if [ -n "$_confdev" ] && [ -f "$MOUNT_OS/larch-os/shadow" ]; then
+        show_step "Moving account files to LARCHCONF ($_confdev)"
+        mkdir -p "$MOUNT_CONF"
+        mount_or_die ext4 "$_confdev" "$MOUNT_CONF"
+        if [ ! -f "$MOUNT_CONF/accounts/shadow" ]; then
+            seed_accounts "$MOUNT_CONF" "$MOUNT_OS/larch-os/passwd" "$MOUNT_OS/larch-os/shadow"
+        fi
+        sync
+        umount "$MOUNT_CONF"
+        rm -f "$MOUNT_OS/larch-os/passwd" "$MOUNT_OS/larch-os/shadow"
+        sync
+    fi
+
     umount "$MOUNT_OS"
     trap - EXIT
 

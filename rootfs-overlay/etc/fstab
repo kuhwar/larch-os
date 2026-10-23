@@ -1,5 +1,6 @@
 # /etc/fstab — larch-os
-# /home is handled by home.mount (systemd unit), not here, so that the
-# mount is completely skipped in live/ISO mode without any device timeout.
+# This is the image-default fstab; the installer writes a per-machine fstab
+# (mounted at /home from LABEL=LARCHHOME, plus LARCHCONF and its bind mounts)
+# which the OS init applies on every boot, replacing this file.
 tmpfs  /tmp     tmpfs  defaults,nosuid,nodev  0  0
 tmpfs  /run     tmpfs  defaults,nosuid,nodev  0  0

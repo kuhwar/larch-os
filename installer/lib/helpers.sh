@@ -25,6 +25,19 @@ die() {
 info() { echo "  >> $*"; }
 nl()   { echo ""; }
 
+# Install the account files into accounts/ on a mounted LARCHCONF.
+# Usage: seed_accounts <larchconf-mount> <passwd-file> <shadow-file>
+seed_accounts() {
+    mkdir -p "$1/accounts"
+    chown 0:0 "$1/accounts"
+    chmod 0700 "$1/accounts"
+    cp "$2" "$1/accounts/passwd"
+    cp "$3" "$1/accounts/shadow"
+    chown 0:0 "$1/accounts/passwd" "$1/accounts/shadow"
+    chmod 0644 "$1/accounts/passwd"
+    chmod 0600 "$1/accounts/shadow"
+}
+
 # Wipe the screen (used to clear dialog's drawing before/after plain output).
 clear_screen() { printf '\033[2J\033[3J\033[H'; }
 
