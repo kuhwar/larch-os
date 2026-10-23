@@ -18,3 +18,50 @@ tasksel-data
 # No privilege escalation on the immutable OS — root is locked and there is no
 # admin path; updates happen from install/upgrade media, not in-session.
 sudo
+
+# DKMS build toolchain — needed only in stage 4 to compile broadcom-sta (wl.ko)
+# and nvidia-kernel-dkms. The built .ko files stay in /lib/modules/*/updates/dkms;
+# the compiler itself (~100 MB) has no use on an immutable OS. The versioned
+# linux-headers-*/linux-kbuild-* packages are matched by glob in clean-rootfs.sh.
+dkms
+make
+patch
+fakeroot
+libfakeroot
+libdpkg-perl
+gcc
+gcc-14
+gcc-x86-64-linux-gnu
+gcc-14-x86-64-linux-gnu
+cpp
+cpp-14
+cpp-x86-64-linux-gnu
+cpp-14-x86-64-linux-gnu
+libgcc-14-dev
+libasan8
+libtsan2
+liblsan0
+libubsan1
+libhwasan0
+libitm1
+libcc1-0
+libisl23
+libmpc3
+binutils
+binutils-common
+binutils-x86-64-linux-gnu
+libbinutils
+libctf0
+libctf-nobfd0
+libsframe1
+libgprofng0
+libc6-dev
+libc-dev-bin
+linux-libc-dev
+libcrypt-dev
+rpcsvc-proto
+
+# Debian branding themes (~17 MB). Its gschema override points the wallpaper at
+# a Debian theme; clean-rootfs.sh recompiles schemas afterwards so the GNOME
+# default (backgrounds/gnome/adwaita-*.jpg) applies.
+desktop-base

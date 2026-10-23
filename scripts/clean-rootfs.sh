@@ -15,6 +15,18 @@ REMOVE_PKGS=$(grep -v '^#' /remove.list | grep -v '^[[:space:]]*$' | tr '\n' ' '
 # shellcheck disable=SC2086
 dpkg --purge --force-depends $REMOVE_PKGS 2>/dev/null || true
 
+# Kernel headers / kbuild carry the kernel version in their names, so they're
+# matched by glob here instead of being listed in remove.list.
+HEADER_PKGS=$(dpkg-query -W -f='${db:Status-Status} ${Package}\n' \
+    'linux-headers-*' 'linux-kbuild-*' 2>/dev/null | awk '$1 == "installed" { print $2 }' || true)
+if [ -n "$HEADER_PKGS" ]; then
+    # shellcheck disable=SC2086
+    dpkg --purge --force-depends $HEADER_PKGS 2>/dev/null || true
+fi
+
+# Fallback for anything the toolchain purge left behind (cc1 alone is ~60 MB).
+rm -rf /usr/libexec/gcc /usr/lib/gcc 2>/dev/null || true
+
 # ── Remove apt and dpkg binaries and databases ───────────────────────────────
 log "Wiping apt/dpkg binaries and databases"
 rm -rf \
@@ -49,6 +61,38 @@ rm -rf \
 # Keep en_US locale only
 mkdir -p /usr/share/locale
 find /usr/share/locale -mindepth 1 -maxdepth 1 ! -name 'en_US' -exec rm -rf {} + 2>/dev/null || true
+
+# GNOME help ships every translation (~30 MB); keep only the untranslated C pages.
+find /usr/share/help -mindepth 1 -maxdepth 1 ! -name 'C' -exec rm -rf {} + 2>/dev/null || true
+
+# ── Trim wallpapers ──────────────────────────────────────────────────────────
+# Keep only the GNOME default (adwaita light/dark), which is what
+# org.gnome.desktop.background points at once desktop-base's override is gone.
+log "Trimming wallpapers"
+find /usr/share/backgrounds/gnome -mindepth 1 ! -name 'adwaita-*' -delete 2>/dev/null || true
+find /usr/share/gnome-background-properties -mindepth 1 ! -name 'adwaita.xml' -delete 2>/dev/null || true
+rm -f /usr/share/glib-2.0/schemas/10_desktop-base.gschema.override
+glib-compile-schemas /usr/share/glib-2.0/schemas
+
+# ── Hide system-config-printer's GUI ─────────────────────────────────────────
+# Only its D-Bus service (org.fedoraproject.Config.Printing, D-Bus-activated)
+# is needed, by GNOME Settings' Printers panel. Drop the duplicate "Print
+# Settings" launcher and the tray applet autostart (GNOME has no tray;
+# gsd-print-notifications already covers printer notifications).
+log "Removing system-config-printer launcher and applet"
+rm -f /usr/share/applications/system-config-printer.desktop \
+      /etc/xdg/autostart/print-applet.desktop
+
+# ── Prune Vulkan drivers that never apply ────────────────────────────────────
+# lvp = software (llvmpipe) Vulkan; gfxstream/virtio = VM-guest-only drivers.
+# GTK4 falls back to its GL renderer without a hardware Vulkan ICD, and Flatpak
+# apps bring their own Mesa from the runtime.
+log "Pruning software/VM Vulkan drivers"
+for _vk in lvp gfxstream virtio; do
+    rm -f "/usr/lib/x86_64-linux-gnu/libvulkan_${_vk}.so" \
+          "/usr/share/vulkan/icd.d/${_vk}_icd.json" \
+          /usr/share/vulkan/icd.d/"${_vk}"_vk_icd.json
+done
 
 # ── Remove *-dev packages leftovers ──────────────────────────────────────────
 log "Removing dev headers and static libraries"

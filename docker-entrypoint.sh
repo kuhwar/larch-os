@@ -453,7 +453,9 @@ run_stage 4 "chroot-configure — install packages and configure system" && {
 # ── Stage 5: clean-rootfs ─────────────────────────────────────────────────────
 run_stage 5 "clean-rootfs — strip package manager and build artifacts" && {
     info "Running rootfs cleanup (removing apt/dpkg)"
-    chroot_run "$SCRIPT_DIR/scripts/clean-rootfs.sh"
+    chroot_run_with_deps \
+        "$SCRIPT_DIR/scripts/clean-rootfs.sh" \
+        "$SCRIPT_DIR/config/remove.list"
     info "Rootfs is now package-manager-free"
 }
 

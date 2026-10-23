@@ -75,9 +75,9 @@ gnome-terminal
 gvfs
 gvfs-backends
 gvfs-fuse
-eog
-evince
-gedit
+# No image viewer / PDF viewer / text editor in the core image — the core
+# desktop is Nautilus + GNOME Terminal only. Users get Loupe, Papers, Text
+# Editor etc. from Flathub.
 
 # ── Boot splash (OEM/firmware logo via BGRT) ─────────────────────────────────
 # plymouth shows a graphical splash; the bgrt theme reuses the firmware's
