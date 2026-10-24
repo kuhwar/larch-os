@@ -65,3 +65,9 @@ rpcsvc-proto
 # a Debian theme; clean-rootfs.sh recompiles schemas afterwards so the GNOME
 # default (backgrounds/gnome/adwaita-*.jpg) applies.
 desktop-base
+
+# cron (Debian "important" priority, pulled in by debootstrap). systemd timers
+# already cover logrotate/e2scrub, and user crontabs would only live in the
+# tmpfs /var until reboot — the setuid crontab is just a needless write path.
+cron
+cron-daemon-common

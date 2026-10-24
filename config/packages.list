@@ -108,6 +108,15 @@ wpasupplicant
 wireless-tools
 iw
 
+# ── Time ─────────────────────────────────────────────────────────────────────
+# systemd-timesyncd: SNTP client (Debian's NTP pool via FallbackNTP=), enabled by
+# default. It also makes timedated report CanNTP, which GNOME Settings' "Automatic
+# Date & Time" switch needs. geoclue-2.0: the location service gsd-datetime uses
+# for "Automatic Time Zone" (GNOME Shell is its agent); on by default via
+# rootfs-overlay/usr/share/glib-2.0/schemas/90_larch.gschema.override.
+systemd-timesyncd
+geoclue-2.0
+
 # ── Bluetooth ────────────────────────────────────────────────────────────────
 bluez
 

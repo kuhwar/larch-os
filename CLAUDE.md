@@ -31,7 +31,9 @@ It then **wipes the target disk** and creates **three partitions**:
 **Deliberately minimal, locked-down configuration.** The system favors zero-decision defaults over flexibility:
 
 - **Networking is always DHCP** with DNS provided by DHCP. No network configuration UI/flow.
-- **Single fixed user.** The account created at install time is the only user. There is **no facility to add or remove users** afterward — user management is intentionally absent.
+- **Single fixed user.** The account created at install time is the only user. There is **no facility to add or remove users** afterward — user management is intentionally absent. `rootfs-overlay/etc/polkit-1/rules.d/99-larch-users.rules` denies `org.freedesktop.accounts.user-administration` and `org.gnome.controlcenter.user-accounts.administration` (add/delete users, account type, autologin in GNOME Settings → Users); the user can still change their own password, name and avatar (`change-own-*` actions).
+- **No remote shell.** No SSH server ships in the image, and `rootfs-overlay/etc/polkit-1/rules.d/99-larch-ssh.rules` denies `org.gnome.controlcenter.remote-login-helper`, so GNOME Settings → System → Secure Shell can never enable `ssh.service`. The row itself stays visible (it is compiled into gnome-control-center with no visibility hook).
+- **Graphical login only.** No text consoles: `rootfs-overlay/etc/systemd/logind.conf.d/10-larch-no-vt.conf` sets `NAutoVTs=0`/`ReserveVT=0`, and `getty@tty1`/`autovt@` are masked via `/dev/null` symlinks in `rootfs-overlay/etc/systemd/system/`. No cron either (`cron` is in `config/remove.list`; systemd timers cover scheduling), and `clean-rootfs.sh` deletes dpkg's `dpkg-db-backup` timer along with dpkg.
 - **Core desktop only:** base GNOME (Wayland), **Nautilus** as the file manager, and **GNOME Terminal**. Nothing beyond the minimal desktop ships in the core image.
 - **No package manager.** Software is installed solely via the **`flatpak` CLI** against Flathub. The base OS cannot be modified by the user; only Flatpak apps and `/home` change.
 
@@ -100,7 +102,7 @@ Ten stages executed in order; `--stage N` skips stages before N, `--only N` runs
 2. **debootstrap** — creates `work/rootfs/` from Debian Trixie; skipped if `work/rootfs/usr/` already exists
 3. **copy-overlay** — `cp -a rootfs-overlay/. work/rootfs/` (overlay wins over debootstrap defaults)
 4. **chroot-configure** — bind-mounts proc/sys/dev, then runs `scripts/setup-chroot.sh` inside chroot
-5. **clean-rootfs** — runs `scripts/clean-rootfs.sh` inside chroot to physically remove apt/dpkg and dev headers
+5. **clean-rootfs** — runs `scripts/clean-rootfs.sh` inside chroot to physically remove apt/dpkg and dev headers; last, it runs `systemd-update-done` so the image ships `/etc/.updated`/`/var/.updated` (otherwise `ConditionNeedsUpdate=` services — ldconfig, systemd-sysusers — rerun every boot, since `/etc` resets each boot)
 6. **make-squashfs** — `mksquashfs work/rootfs work/rootfs.squashfs -comp zstd -Xcompression-level 19`
 7. **build-os-initramfs** — builds the tiny OS initramfs (`work/os-initramfs.img`): busybox + modules + init, **no squashfs**. Squashfs lives separately on the LARCHOS partition and is loop-mounted at boot.
 8. **build-installer** — builds the installer initramfs (`work/installer-initramfs.img`): busybox + modules + `install.sh` + `reserved-names` (user/group names from the rootfs, minus `larch`) + tool binaries (sfdisk, wipefs, mkfs.fat, mkfs.ext4, openssl, blockdev, plus `dialog` + terminfo for the installer UI — required, the build fails if they are absent from the rootfs). GRUB boots this to run the installer.
@@ -189,6 +191,7 @@ The OS init re-applies these on every boot into the tmpfs upper layer:
 - **shadow**: strips the default `larch:` entry, appends the hashed installer entry
 - **group**: `sed 's/\blarch\b/$USERNAME/g'` — renames group memberships to the installed username (word-boundary-safe)
 - **machine-id**: copies the installer value to `/etc/machine-id` (mode 0444). Without it, `/etc` being tmpfs means systemd would synthesise a *new* id every boot, so the machine would get a different DHCP lease/IP (the DHCP client-id / DHCPv6 DUID derive from machine-id) and a fresh journal identity on each boot. Generated once at install from the kernel UUID pool.
+- **timezone**: if `LARCHCONF:/timezone` exists, re-links `/etc/localtime` to `../usr/share/zoneinfo/<zone>` (only plain zone names that exist in the image; otherwise the image default, UTC). Time and timezone are automatic by default: `systemd-timesyncd` syncs the clock, and `rootfs-overlay/usr/share/glib-2.0/schemas/90_larch.gschema.override` turns on `automatic-timezone` and Location Services, so gsd-datetime sets the zone via `geoclue-2.0`. `rootfs-overlay/etc/polkit-1/rules.d/99-larch-datetime.rules` lets the active local session call timedated for this (`timedate1.set-timezone`/`set-ntp`/`set-time`, plus GNOME's `datetime.configure` to unlock the Date & Time page); `larch-persist-timezone.path` writes changes back. It watches `/etc` itself, not `/etc/localtime` — inotify follows the symlink to the read-only zoneinfo file, so a watch on the link never fires when timedated replaces it.
 - **fstab**: replaces `/etc/fstab`; `systemd-fstab-generator` turns the `LABEL=LARCHHOME → /home` entry into `home.mount`. The init also creates the `/etc/larch-conf` mount point and a fallback `/home/<username>` dir in the tmpfs upper layer (owned 1000:1000, mode 0750) — visible only if LARCHHOME is absent, since the mounted partition hides it otherwise
 
 ### `/home` and `/etc/larch-conf` persistence
@@ -245,6 +248,7 @@ Partition 1 — FAT32, 3 GiB, label LARCHOS
 
 Partition 2 — ext4, 512 MiB, label LARCHCONF   (mounted at /etc/larch-conf)
   accounts/passwd, shadow   (user account; read by OS init, written back by larch-persist-accounts)
+  timezone                  (zone name, e.g. Europe/Berlin; read by OS init, written back by larch-persist-timezone)
   nm-system-connections/    (bind-mounted over /etc/NetworkManager/system-connections)
   bluetooth/                (bind-mounted over /var/lib/bluetooth)
   cups/                     (bind-mounted over /etc/cups/larch-state)

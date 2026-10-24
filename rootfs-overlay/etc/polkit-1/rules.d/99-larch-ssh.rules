@@ -1,0 +1,9 @@
+// larch-os — no remote shell access. GNOME Settings → System → Secure Shell
+// toggles ssh.service through the remote-login helper (run via pkexec). No SSH
+// server ships in the image, but deny the helper outright so remote login can
+// never be switched on, even if one is added later.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.gnome.controlcenter.remote-login-helper") {
+        return polkit.Result.NO;
+    }
+});

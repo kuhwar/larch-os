@@ -1,0 +1,10 @@
+# larch-os GSettings defaults (compiled by glib-compile-schemas in
+# scripts/clean-rootfs.sh). The user can still change them in GNOME Settings.
+
+# Set the timezone automatically from the location (gsd-datetime + geoclue);
+# GNOME requires Location Services for it, so enable those too.
+[org.gnome.desktop.datetime]
+automatic-timezone=true
+
+[org.gnome.system.location]
+enabled=true

@@ -242,6 +242,26 @@ if [ -f "$ACCT/shadow" ]; then
     chmod 640 /mnt/root/etc/shadow
 fi
 
+# /etc/localtime — the timezone saved by larch-persist-timezone when it's changed
+# in GNOME Settings (absent → the image default, UTC). Only a plain zone name
+# that exists in the image's zoneinfo is linked.
+if [ -f /mnt/larchconf/timezone ]; then
+    _tz="$(head -n 1 /mnt/larchconf/timezone)"
+    case "$_tz" in
+        ""|/*|*..*|*[!A-Za-z0-9_+/-]*)
+            log "  timezone: ignoring invalid '$_tz'" ;;
+        *)
+            if [ -f "/mnt/root/usr/share/zoneinfo/$_tz" ]; then
+                mkdir -p /mnt/root/etc
+                ln -sfn "../usr/share/zoneinfo/$_tz" /mnt/root/etc/localtime
+                log "  timezone: $_tz"
+            else
+                log "  timezone: unknown zone '$_tz', keeping default"
+            fi ;;
+    esac
+    unset _tz
+fi
+
 # Release LARCHCONF so systemd-fsck can check it before mounting it read-write.
 umount /mnt/larchconf 2>/dev/null || true
 

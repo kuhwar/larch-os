@@ -1,0 +1,14 @@
+// larch-os — single fixed user. The account created at install time is the
+// only one; /etc/passwd lives in the tmpfs overlay and only the UID-1000 line
+// is persisted to LARCHCONF, so a user added via AccountsService (GNOME
+// Settings → Users → Add User) would vanish on reboot. Deny user administration
+// outright (add/delete users, change account type, autologin), along with
+// GNOME Settings' own permission for unlocking those controls in the Users
+// panel. Changes to the user's own account (password, full name, avatar,
+// language) use the separate change-own-* actions and stay allowed.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.accounts.user-administration" ||
+        action.id == "org.gnome.controlcenter.user-accounts.administration") {
+        return polkit.Result.NO;
+    }
+});

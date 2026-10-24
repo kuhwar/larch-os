@@ -41,6 +41,13 @@ rm -rf \
     /etc/apt \
     /etc/dpkg
 
+# dpkg's own daily backup job would fail every run once dpkg is gone.
+rm -f \
+    /usr/lib/systemd/system/dpkg-db-backup.service \
+    /usr/lib/systemd/system/dpkg-db-backup.timer \
+    /etc/systemd/system/timers.target.wants/dpkg-db-backup.timer \
+    /etc/cron.daily/dpkg
+
 # ── Remove package manager leftovers ─────────────────────────────────────────
 # NOTE: the python3 interpreter itself (/usr/bin/python3*) is NOT removed here
 # — system-config-printer's scp-dbus-service.py (org.fedoraproject.Config.Printing,
@@ -118,6 +125,14 @@ rm -rf \
     /root/.bash_history \
     /home/*/.bash_history \
     2>/dev/null || true
+
+# ── Mark /etc and /var as up to date with /usr ───────────────────────────────
+# ConditionNeedsUpdate= (ldconfig, systemd-sysusers, systemd-update-done)
+# compares /usr's mtime against /etc/.updated and /var/.updated. Without them in
+# the image — and /etc reset to the image on every boot — those services ran on
+# every boot. Written last, so /usr's mtime is final.
+log "Stamping /etc/.updated and /var/.updated"
+/usr/lib/systemd/systemd-update-done
 
 # ── Remove build scripts from rootfs ─────────────────────────────────────────
 log "Removing build scripts from rootfs"
