@@ -18,7 +18,7 @@
 #     files and the LARCHHOME partition are preserved; nothing is reformatted.
 #
 #   Clean install — the flow below: ask full name · password (the username is
-#     derived from the full name, the hostname as <username>-<device type>),
+#     derived from the full name, the hostname as <username>-<brand>-<device type>),
 #     then wipe and repartition the disk.
 #
 # Clean install writes to LARCHOS:

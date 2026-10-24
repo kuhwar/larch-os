@@ -18,7 +18,7 @@ The end product is an **atomic, image-based distro** where the entire OS is one 
 
 The **username** is not asked for: it is derived from the full name (`installer/lib/config-form.sh` `derive_username`) — common accented Latin letters folded to ASCII, lowercased, everything but `a-z0-9` dropped, leading digits stripped, capped at 30 chars (`Jane Doe` → `janedoe`; non-Latin-only names → `user`). If it collides with a name the image's system accounts/groups already use (`root`, `man`, `gdm`, … — listed at build time into the installer's `/usr/lib/larch/reserved-names`), a numeric suffix is appended (`root1`). The full name as typed becomes the passwd GECOS field, i.e. GNOME's display name.
 
-The **hostname** is not asked for either: it is derived as `<username>-<device type>` (e.g. `janedoe-laptop`; `laptop`/`desktop`/`tablet`/`pc` from the SMBIOS chassis type in `/sys/class/dmi/id/chassis_type`). It is fixed after install — `rootfs-overlay/etc/polkit-1/rules.d/99-larch-hostname.rules` denies all `org.freedesktop.hostname1.set-*` actions, since a rename would only land in the tmpfs `/etc` and revert on reboot.
+The **hostname** is not asked for either: it is derived as `<username>-<brand>-<device type>` (e.g. `janedoe-lenovo-laptop`; brand from the SMBIOS `sys_vendor`, falling back to `board_vendor`, shortened — `ASUSTeK COMPUTER INC.` → `asus` — and omitted if it is a placeholder like `To be filled by O.E.M.`; `laptop`/`desktop`/`tablet`/`pc` from the SMBIOS chassis type in `/sys/class/dmi/id/chassis_type`). It is fixed after install — `rootfs-overlay/etc/polkit-1/rules.d/99-larch-hostname.rules` denies all `org.freedesktop.hostname1.set-*` actions, since a rename would only land in the tmpfs `/etc` and revert on reboot.
 
 It then **wipes the target disk** and creates **three partitions**:
 
@@ -167,7 +167,7 @@ The installer writes these files to `LARCHOS:/larch-os/`:
 
 | File | Content |
 |---|---|
-| `hostname` | plain hostname string (`<username>-<device type>`, derived by the installer) |
+| `hostname` | plain hostname string (`<username>-<brand>-<device type>`, derived by the installer) |
 | `hosts` | `/etc/hosts` content |
 | `username` | plain username string (used by init to rename groups) |
 | `machine-id` | 32 hex digits — stable `/etc/machine-id`, generated once at install |

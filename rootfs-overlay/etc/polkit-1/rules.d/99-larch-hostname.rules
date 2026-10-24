@@ -1,4 +1,4 @@
-// larch-os — the hostname is fixed at install time (<username>-<device type>,
+// larch-os — the hostname is fixed at install time (<username>-<brand>-<device type>,
 // derived by the installer and stored on LARCHOS:/larch-os/hostname). /etc is a
 // tmpfs overlay, so a rename via systemd-hostnamed (GNOME Settings → About →
 // Device Name, hostnamectl) would silently revert on reboot. Deny all hostnamed
