@@ -8,7 +8,7 @@ set -euo pipefail
 log() { echo "  [chroot] $*"; }
 
 # ── Locale & timezone ────────────────────────────────────────────────────────
-# Only WRITE the locale config here. The locale is compiled later, after the
+# Only WRITE the locale config here. Locales are compiled later, after the
 # `locales` package is installed — running locale-gen now (before `locales`
 # ships /usr/share/i18n) silently produces nothing, leaving only glibc's
 # built-in C.utf8 and breaking UTF-8 apps like gnome-terminal (VTE).
@@ -84,11 +84,15 @@ apt-get install -y --no-install-recommends -t trixie-backports \
 # systemd-hibernate.service; enablement creates those .wants links).
 systemctl enable nvidia-suspend.service nvidia-resume.service nvidia-hibernate.service
 
-# ── Generate locale (now that `locales` + /usr/share/i18n are installed) ───────
-# Must run AFTER package install. The compiled archive lands in /usr/lib/locale
-# and survives clean-rootfs (which only strips /usr/share/i18n source data).
-log "Generating en_US.UTF-8 locale"
-locale-gen en_US.UTF-8
+# ── Generate locales (now that `locales` + /usr/share/i18n are installed) ──────
+# Must run AFTER package install. Every supported locale is compiled, so any
+# language and region format is selectable in GNOME Settings (~33 MB in the
+# squashfs); en_US.UTF-8 stays the default. The compiled archive lands in
+# /usr/lib/locale and survives clean-rootfs (which only strips /usr/share/i18n
+# source data).
+log "Generating all supported locales"
+cp /usr/share/i18n/SUPPORTED /etc/locale.gen
+locale-gen
 # Fail the build loudly if the archive didn't materialise — a missing en_US
 # locale silently breaks gnome-terminal (status=9, "Locale not supported").
 LC_ALL=en_US.UTF-8 locale >/dev/null 2>&1 \

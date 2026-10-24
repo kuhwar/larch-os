@@ -54,23 +54,20 @@ rm -f \
 # used by GNOME Settings' printer panel) needs a real python3 at runtime. Only
 # the apt/dpkg python bindings are stripped, same as python3-apt/python3-debian
 # above.
+#
+# Translations (/usr/share/locale, ~66 MB in the squashfs) and translated GNOME
+# help are kept: every language is selectable. /usr/share/i18n is only the
+# source data locale-gen compiles from (setup-chroot.sh already compiled every
+# locale into /usr/lib/locale/locale-archive), so it goes.
 log "Removing package manager related files"
 rm -rf \
     /usr/share/doc \
     /usr/share/man \
     /usr/share/info \
-    /usr/share/locale \
     /usr/share/i18n \
     /usr/lib/python3/dist-packages/apt* \
     /usr/lib/python3/dist-packages/debian* \
     2>/dev/null || true
-
-# Keep en_US locale only
-mkdir -p /usr/share/locale
-find /usr/share/locale -mindepth 1 -maxdepth 1 ! -name 'en_US' -exec rm -rf {} + 2>/dev/null || true
-
-# GNOME help ships every translation (~30 MB); keep only the untranslated C pages.
-find /usr/share/help -mindepth 1 -maxdepth 1 ! -name 'C' -exec rm -rf {} + 2>/dev/null || true
 
 # ── Trim wallpapers ──────────────────────────────────────────────────────────
 # Keep only the GNOME default (adwaita light/dark), which is what

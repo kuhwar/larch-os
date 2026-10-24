@@ -206,18 +206,20 @@ Several daemons keep their state under `/etc` or `/var`, both of which live in t
 2. **Installer-generated fstab adds a bind line** from that LARCHCONF directory onto the service's live state path (`bind,nofail`, plus `x-systemd.mkdir` where the target isn't guaranteed to already exist). `systemd-fstab-generator` auto-orders the bind mount after the `/etc/larch-conf` mount.
 3. **A static `RequiresMountsFor` drop-in in `rootfs-overlay/etc/systemd/system/<service>.service.d/`** holds the service until its bind mount is ready — otherwise it could write state into the tmpfs upper before persistence is wired up and lose it on reboot.
 
-Three services currently use this pattern:
+Four services currently use this pattern:
 
 | Service | LARCHCONF dir | Bind target | Drop-in |
 |---|---|---|---|
 | NetworkManager | `nm-system-connections/` | `/etc/NetworkManager/system-connections` | `NetworkManager.service.d/10-persist-connections.conf` |
 | bluetoothd | `bluetooth/` | `/var/lib/bluetooth` | `bluetooth.service.d/10-persist-devices.conf` |
 | cupsd | `cups/` | `/etc/cups/larch-state` | `cups.service.d/10-persist-printers.conf` |
+| accounts-daemon | `accountsservice/` | `/var/lib/AccountsService` | `accounts-daemon.service.d/10-persist-users.conf` |
 
 Notes:
 - **NetworkManager**: only the **connection profiles** persist (enough to auto-reconnect). NM's volatile state in `/var/lib/NetworkManager/` (DHCP leases, seen-BSSID timestamps) still resets each boot — harmless for an immutable system. **VPN configurations persist for free** — GNOME/NetworkManager VPN connections are stored as keyfiles in the same `system-connections/` directory, so the bind mount covers them too (VPNs needing an out-of-tree plugin still require that plugin in the squashfs).
 - **Bluetooth**: `/var/lib/bluetooth` holds per-adapter pairing keys and device info; bluez doesn't ship this directory by default, hence `x-systemd.mkdir` on the fstab line.
 - **Printing (CUPS)**: only queue *state* persists — `printers.conf`, `classes.conf`, `subscriptions.conf`, and `ppd/` — not the daemon's static config (`cupsd.conf`, `cups-files.conf`, `mime.types`, `snmp.conf`, `client.conf`), which should always come fresh from the image on upgrade. `scripts/setup-chroot.sh` symlinks those four state paths to `larch-state/...` inside `/etc/cups/`, and LARCHCONF's `cups/` directory is bind-mounted onto `/etc/cups/larch-state` (not directly onto `/etc/cups`) so the daemon config stays image-owned. GNOME Settings' Printers panel talks to cupsd via `cups-pk-helper`'s polkit actions (`org.opensuse.cupspkhelper.mechanism.*`); since root is locked and there's no admin/sudo group, `rootfs-overlay/etc/polkit-1/rules.d/99-larch-cups.rules` grants those to the active local session, mirroring `99-larch-flatpak.rules`.
+- **AccountsService**: holds the user's **language** (GNOME Settings → Region & Language; GDM starts the session with it) and **avatar** (`icons/`). The seeded dir is `0755`, not `0700` like the others, since GDM's greeter reads avatars from it. The image ships every language: `setup-chroot.sh` compiles all of `/usr/share/i18n/SUPPORTED` into the locale archive, and `clean-rootfs.sh` keeps `/usr/share/locale` and translated help (only `/usr/share/i18n` source data is dropped) — about +100 MB in the squashfs. Region formats are a per-user GSettings key, so they persist in `/home` without this.
 - **Adding future persistent config**: follow the same three-part pattern above. If the service's state files aren't isolated to one directory (like CUPS), symlink them into a dedicated subdirectory in `scripts/setup-chroot.sh` (after the package installs, so it isn't clobbered by dpkg) rather than persisting the whole config tree.
 - Rebuild after changing this: stage 3 (overlay drop-ins) + stage 4 (setup-chroot.sh changes, e.g. CUPS symlinks) + stage 8 (installer). Note the cached rootfs has apt stripped, so a drop-in-only change should use `--only 3` then `--stage 6` instead of `--stage 3`, to avoid the failing chroot-configure stage.
 
@@ -252,6 +254,7 @@ Partition 2 — ext4, 512 MiB, label LARCHCONF   (mounted at /etc/larch-conf)
   nm-system-connections/    (bind-mounted over /etc/NetworkManager/system-connections)
   bluetooth/                (bind-mounted over /var/lib/bluetooth)
   cups/                     (bind-mounted over /etc/cups/larch-state)
+  accountsservice/          (bind-mounted over /var/lib/AccountsService)
 
 Partition 3 — ext4, remainder, label LARCHHOME   (mounted at /home)
   <username>/               (the user's home, seeded from /etc/skel at install time; persistent)

@@ -195,6 +195,12 @@ printf '/etc/larch-conf/bluetooth\t\t/var/lib/bluetooth\tnone\tbind,nofail,x-sys
 # drop-in in the rootfs overlay.
 printf '/etc/larch-conf/cups\t\t\t/etc/cups/larch-state\tnone\tbind,nofail,x-systemd.mkdir\t0\t0\n' \
                                                                                >> "$CONFIG_TMP/fstab"
+# Persist AccountsService's per-user state on LARCHCONF: the language chosen in
+# GNOME Settings (GDM starts the session with it) and the avatar.
+# accounts-daemon.service waits for the mount via a RequiresMountsFor drop-in
+# in the rootfs overlay.
+printf '/etc/larch-conf/accountsservice\t/var/lib/AccountsService\tnone\tbind,nofail\t0\t0\n' \
+                                                                               >> "$CONFIG_TMP/fstab"
 
 # ── Partition ─────────────────────────────────────────────────────────────────
 
@@ -287,6 +293,15 @@ chmod 0700 "$MOUNT_CONF/cups"
 mkdir -p "$MOUNT_CONF/cups/ppd"
 chown 0:0 "$MOUNT_CONF/cups/ppd"
 chmod 0700 "$MOUNT_CONF/cups/ppd"
+
+# AccountsService state, mirroring the image's /var/lib/AccountsService
+# layout and modes (all 0755). Unlike the others this must stay
+# world-traversable: GDM's greeter reads users' avatars from icons/. The
+# per-user settings files in users/ are created 0600 by accounts-daemon.
+mkdir -p "$MOUNT_CONF/accountsservice/icons" "$MOUNT_CONF/accountsservice/users"
+chown -R 0:0 "$MOUNT_CONF/accountsservice"
+chmod 0755 "$MOUNT_CONF/accountsservice" "$MOUNT_CONF/accountsservice/icons" \
+    "$MOUNT_CONF/accountsservice/users"
 
 sync
 umount "$MOUNT_CONF"
