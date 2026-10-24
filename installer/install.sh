@@ -17,8 +17,9 @@
 #     rootfs.squashfs, EFI binary, loader config) in place. The per-machine config
 #     files and the LARCHHOME partition are preserved; nothing is reformatted.
 #
-#   Clean install — the flow below: ask hostname · username · password, then wipe
-#     and repartition the disk.
+#   Clean install — the flow below: ask full name · password (the username is
+#     derived from the full name, the hostname as <username>-<device type>),
+#     then wipe and repartition the disk.
 #
 # Clean install writes to LARCHOS:
 #   vmlinuz · initramfs.img · bootloader · per-machine config
@@ -111,15 +112,16 @@ if [ "$AUTO_YES" -ne 1 ]; then
     dialog --colors --yes-label "Install" --no-label "Cancel" \
         --backtitle "$DIALOG_BT" --title " Confirm Installation " \
         --yesno "\
-  Hostname         : $LARCH_HOSTNAME
+  Full name        : $LARCH_FULLNAME
   Username         : $LARCH_USERNAME
+  Hostname         : $LARCH_HOSTNAME
   Target disk      : $TARGET_DISK
   OS partition     : $PART1  (FAT32, $OS_PART_SIZE, LARCHOS)
   Config partition : $PART2  (ext4, $CONF_PART_SIZE, LARCHCONF)
   Home partition   : $PART3  (ext4, remainder, LARCHHOME)
 
   \Z1WARNING: ALL DATA ON $TARGET_DISK WILL BE DESTROYED.\Zn" \
-        16 70 \
+        17 70 \
         || { TARGET_DISK=""; continue; }
     clear_screen
 fi
@@ -141,8 +143,9 @@ printf '%s\n' "$LARCH_HOSTNAME" > "$CONFIG_TMP/hostname"
 printf '127.0.0.1\tlocalhost\n127.0.1.1\t%s\n::1\tlocalhost ip6-localhost ip6-loopback\n' \
     "$LARCH_HOSTNAME" > "$CONFIG_TMP/hosts"
 
+# GECOS = the full name as typed (GNOME shows it as the display name).
 printf '%s:x:1000:1000:%s:/home/%s:/bin/bash\n' \
-    "$LARCH_USERNAME" "$LARCH_USERNAME" "$LARCH_USERNAME" > "$CONFIG_TMP/passwd"
+    "$LARCH_USERNAME" "$LARCH_FULLNAME" "$LARCH_USERNAME" > "$CONFIG_TMP/passwd"
 
 # busybox mkpasswd is statically linked and always available in the initramfs.
 # openssl passwd -6 is a fallback (dynamically linked; requires libraries).
@@ -321,14 +324,15 @@ dialog --backtitle "$DIALOG_BT" --title " Installation Complete " \
     --msgbox "\
   larch-os has been installed successfully.
 
-  Hostname : $LARCH_HOSTNAME
+  Name     : $LARCH_FULLNAME
   User     : $LARCH_USERNAME
+  Hostname : $LARCH_HOSTNAME
   OS       : $PART1  (LARCHOS)
   Config   : $PART2  (LARCHCONF)
   Home     : $PART3  (LARCHHOME)
 
   Remove the installation media, then choose OK to reboot." \
-    16 60
+    17 60
 clear_screen
 umount /mnt/iso 2>/dev/null || true
 do_reboot

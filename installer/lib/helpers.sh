@@ -11,6 +11,7 @@ MOUNT_CONF="/run/larch-target-conf"
 MOUNT_HOME="/run/larch-target-home"
 
 LARCH_HOSTNAME=""
+LARCH_FULLNAME=""
 LARCH_USERNAME=""
 LARCH_PASSWORD=""
 

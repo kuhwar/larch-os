@@ -278,6 +278,12 @@ build_installer_initramfs() {
         install -D -m 644 "$_lib" "$build_dir/usr/lib/larch/$(basename "$_lib")"
     done
 
+    # User/group names the image already uses (root, daemon, man, gdm, ...), so
+    # the installer never derives a username that clashes with one. "larch" is
+    # left out: it is the UID-1000 placeholder the installed user replaces.
+    cut -d: -f1 "$ROOTFS_DIR/etc/passwd" "$ROOTFS_DIR/etc/group" \
+        | grep -vx larch | sort -u > "$build_dir/usr/lib/larch/reserved-names"
+
     # Copy /etc/skel from larch OS rootfs so the installer can seed the home partition
     if [ -d "$ROOTFS_DIR/etc/skel" ]; then
         mkdir -p "$build_dir/mnt/iso/skel"

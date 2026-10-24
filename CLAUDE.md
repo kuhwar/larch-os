@@ -10,12 +10,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The end product is an **atomic, image-based distro** where the entire OS is one immutable unit and upgrades happen by swapping that unit — never by mutating files in place.
 
-**Boot-to-install flow.** `./docker-build.sh` produces `larch-os.iso`. Booting the ISO drops the user straight into the installer script (no live desktop). The installer collects exactly four things:
+**Boot-to-install flow.** `./docker-build.sh` produces `larch-os.iso`. Booting the ISO drops the user straight into the installer script (no live desktop). The installer collects exactly three things:
 
-1. hostname
-2. username
-3. password
-4. target disk
+1. full name
+2. password
+3. target disk
+
+The **username** is not asked for: it is derived from the full name (`installer/lib/config-form.sh` `derive_username`) — common accented Latin letters folded to ASCII, lowercased, everything but `a-z0-9` dropped, leading digits stripped, capped at 30 chars (`Jane Doe` → `janedoe`; non-Latin-only names → `user`). If it collides with a name the image's system accounts/groups already use (`root`, `man`, `gdm`, … — listed at build time into the installer's `/usr/lib/larch/reserved-names`), a numeric suffix is appended (`root1`). The full name as typed becomes the passwd GECOS field, i.e. GNOME's display name.
+
+The **hostname** is not asked for either: it is derived as `<username>-<device type>` (e.g. `janedoe-laptop`; `laptop`/`desktop`/`tablet`/`pc` from the SMBIOS chassis type in `/sys/class/dmi/id/chassis_type`). It is fixed after install — `rootfs-overlay/etc/polkit-1/rules.d/99-larch-hostname.rules` denies all `org.freedesktop.hostname1.set-*` actions, since a rename would only land in the tmpfs `/etc` and revert on reboot.
 
 It then **wipes the target disk** and creates **three partitions**:
 
@@ -100,7 +103,7 @@ Ten stages executed in order; `--stage N` skips stages before N, `--only N` runs
 5. **clean-rootfs** — runs `scripts/clean-rootfs.sh` inside chroot to physically remove apt/dpkg and dev headers
 6. **make-squashfs** — `mksquashfs work/rootfs work/rootfs.squashfs -comp zstd -Xcompression-level 19`
 7. **build-os-initramfs** — builds the tiny OS initramfs (`work/os-initramfs.img`): busybox + modules + init, **no squashfs**. Squashfs lives separately on the LARCHOS partition and is loop-mounted at boot.
-8. **build-installer** — builds the installer initramfs (`work/installer-initramfs.img`): busybox + modules + `install.sh` + tool binaries (sfdisk, wipefs, mkfs.fat, mkfs.ext4, openssl, blockdev, plus `dialog` + terminfo for the installer UI — required, the build fails if they are absent from the rootfs). GRUB boots this to run the installer.
+8. **build-installer** — builds the installer initramfs (`work/installer-initramfs.img`): busybox + modules + `install.sh` + `reserved-names` (user/group names from the rootfs, minus `larch`) + tool binaries (sfdisk, wipefs, mkfs.fat, mkfs.ext4, openssl, blockdev, plus `dialog` + terminfo for the installer UI — required, the build fails if they are absent from the rootfs). GRUB boots this to run the installer.
 9. **assemble-iso** — builds `work/iso/` directory tree (see ISO layout below)
 10. **make-iso** — `grub-mkrescue -d /usr/lib/grub/x86_64-efi -o larch-os.iso work/iso/ -- -volid LARCHISO` (`-d` pins a single GRUB platform so the ISO is **UEFI-only**)
 
@@ -144,7 +147,7 @@ GRUB boots `vmlinuz` + `installer-initramfs.img`. Everything under `/larch-os/` 
 
 **Installer (`installer/install.sh`, bundled into the installer initramfs as `/usr/sbin/larch-install`)**:
 1. Verifies the ISO payload at `/mnt/iso/larch-os/`
-2. Prompts for hostname/username/password/target disk
+2. Prompts for full name/password/target disk (username is derived from the full name, hostname from username + chassis type)
 3. Partitions + formats (3 partitions), copies `initramfs.img` + `rootfs.squashfs` + `vmlinuz` + bootloader to LARCHOS, writes per-machine config, seeds LARCHCONF (NM connections dir) and LARCHHOME, then reboots
 
 **OS initramfs (`initramfs/os/init`)** — busybox sh PID 1:
@@ -164,7 +167,7 @@ The installer writes these files to `LARCHOS:/larch-os/`:
 
 | File | Content |
 |---|---|
-| `hostname` | plain hostname string |
+| `hostname` | plain hostname string (`<username>-<device type>`, derived by the installer) |
 | `hosts` | `/etc/hosts` content |
 | `username` | plain username string (used by init to rename groups) |
 | `machine-id` | 32 hex digits — stable `/etc/machine-id`, generated once at install |
@@ -174,7 +177,7 @@ The account files go to `LARCHCONF:/accounts/` instead (dir `0700`, root-owned) 
 
 | File | Content |
 |---|---|
-| `accounts/passwd` | single `/etc/passwd` line for UID 1000 (mode 0644) |
+| `accounts/passwd` | single `/etc/passwd` line for UID 1000, GECOS = full name (mode 0644) |
 | `accounts/shadow` | single `/etc/shadow` line with SHA-512 hash (mode 0600) |
 
 The OS init mounts LARCHCONF **read-only** (`findfs LABEL=LARCHCONF`, ext4 modules loaded) just to read these, then unmounts it before `switch_root` so `systemd-fsck` can check it. If LARCHCONF or `accounts/` is missing, it falls back to `LARCHOS:/larch-os/{passwd,shadow}` (pre-move installs, `make-dev-disk.sh` disks). The installer's **update** path migrates those LARCHOS copies into `LARCHCONF:/accounts/` and deletes them from LARCHOS.
