@@ -18,11 +18,12 @@ networking, no package manager to fiddle with, no options to get lost in.
 >   alongside." Back up anything you care about first, and double-check which disk you
 >   select.
 >
-> - **There is no upgrade path yet.** Once installed, larch-os cannot currently be
->   updated in place. Moving to a newer version means a **fresh install, which wipes
->   the disk again — including your `/home`.** Back up your data before reinstalling.
->   In-place atomic upgrades (that keep `/home`) are planned — see the
->   [Roadmap](#roadmap).
+> - **For now, every new release requires a full install.** The installer offers an
+>   **Update** option for disks that already have larch-os, but it is not maintained
+>   yet: the disk layout and config format still change between releases, and an
+>   update may leave the system broken. A full install **wipes the disk again —
+>   including your `/home`.** Back up your data before reinstalling. Reliable atomic
+>   upgrades (that keep `/home`) are planned — see the [Roadmap](#roadmap).
 >
 > - **UEFI only.** The machine must boot in UEFI mode. Legacy BIOS is not supported.
 
@@ -84,23 +85,27 @@ larger is plenty.
    the USB entry, in **UEFI** mode).
 2. A short boot menu appears for 3 seconds, then larch-os boots **straight into the
    installer** — there is no live desktop to explore.
-3. The installer asks for exactly four things:
+3. The installer asks for exactly three things:
 
    | Prompt | What it's for |
    |---|---|
-   | **Hostname** | The computer's name on the network |
-   | **Username** | Your single user account |
-   | **Password** | Password for that account |
+   | **Full name** | Your display name; the username is derived from it (`Jane Doe` → `janedoe`) |
+   | **Password** | Password for your single user account |
    | **Target disk** | The disk to install onto — **this disk is wiped** |
+
+   The computer's name is derived too: `<username>-<brand>-<device type>`, e.g.
+   `janedoe-lenovo-laptop`. If the disk already has larch-os, choose **Clean install**,
+   not Update (see [Updating](#updating)).
 
 4. Review the summary and confirm. The installer then **erases the target disk**,
    creates its layout, and copies the system over.
 5. When it finishes, remove the USB stick and reboot. You'll land at the GNOME login
    screen.
 
-> The disk is split into two partitions: a small boot/system partition that holds the OS
-> image and your machine's settings, and a larger partition for your `/home`. Keeping
-> them separate is what will make future upgrades possible without touching your files.
+> The disk is split into three partitions: a boot/system partition that holds the OS
+> image, a small config partition for system settings (Wi-Fi, Bluetooth, printers,
+> your account, logs), and a large partition for your `/home`. Keeping them separate
+> is what will make future upgrades possible without touching your files.
 
 ## 4. First boot & installing apps
 
@@ -144,9 +149,11 @@ This is by design: it makes the system predictable and very hard to break.
 
 ## Updating
 
-**Not available yet.** larch-os currently has no in-place update mechanism. To run a
-newer release you must do a fresh install, which **erases the whole disk, including your
-`/home`** — so **back up your data first**.
+**For now, use a full install for every new release.** The installer has an **Update**
+option that replaces the OS image in place and keeps your settings and `/home`, but it
+is not maintained across releases yet — the disk layout and config format are still
+changing, so an update may leave the system broken. A full install **erases the whole
+disk, including your `/home`** — so **back up your data first**.
 
 Atomic, in-place upgrades that swap the OS image while preserving your `/home` are the
 top item on the [Roadmap](#roadmap).
@@ -157,7 +164,7 @@ top item on the [Roadmap](#roadmap).
   or remove users afterward.
 - **Networking is automatic (DHCP) only.** There's no network configuration UI.
 - **Apps via Flatpak only.** No `apt`, no system package manager.
-- **No in-place upgrades yet** (see above).
+- **No reliable in-place upgrades yet** — full install required (see above).
 
 ## Roadmap
 
