@@ -39,6 +39,28 @@ seed_accounts() {
     chmod 0600 "$1/accounts/shadow"
 }
 
+# Copy each top-level directory of the ISO's larchconf-seed/ onto a mounted
+# LARCHCONF, skipping any that already exist there (never clobbers live state).
+# ISO9660 drops modes, so they're set here: root-owned, directories get the mode
+# in a sibling <name>.mode file (default 0700), files the same minus execute.
+# Usage: seed_larchconf <larchconf-mount>
+seed_larchconf() {
+    for _src in "$ISO_MOUNT/larchconf-seed"/*/; do
+        [ -d "$_src" ] || continue
+        _name=$(basename "$_src")
+        [ -e "$1/$_name" ] && continue
+        _mode=0700
+        if [ -f "$ISO_MOUNT/larchconf-seed/$_name.mode" ]; then
+            _mode=$(cat "$ISO_MOUNT/larchconf-seed/$_name.mode")
+        fi
+        cp -R "${_src%/}" "$1/"
+        chown -R 0:0 "$1/$_name"
+        find "$1/$_name" -type d -exec chmod "$_mode" {} \;
+        find "$1/$_name" -type f -exec chmod "$_mode" {} \; -exec chmod a-x {} \;
+    done
+    unset _src _name _mode
+}
+
 # Wipe the screen (used to clear dialog's drawing before/after plain output).
 clear_screen() { printf '\033[2J\033[3J\033[H'; }
 

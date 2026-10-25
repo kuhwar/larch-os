@@ -212,18 +212,17 @@ log "  username: $USERNAME"
 # Account files (passwd/shadow) live on LARCHCONF (ext4, root-only), not on
 # FAT32 LARCHOS where any mounter could read the hash. Mount it read-only just
 # long enough to read them; systemd mounts it read-write later via fstab, and
-# larch-persist-accounts.path writes password changes back to it.
-# Fall back to LARCHOS for installs that predate the move (and dev disks).
-ACCT="$CFG"
+# larch-persist-accounts.path writes password changes back to it. Without
+# them the image's default user is left in place.
+ACCT="/mnt/larchconf/accounts"
 mkdir -p /mnt/larchconf
 _conf="$(findfs LABEL=LARCHCONF 2>/dev/null || true)"
 if [ -n "$_conf" ] && mount -r -t ext4 "$_conf" /mnt/larchconf 2>/dev/null; then
-    if [ -f /mnt/larchconf/accounts/passwd ] && [ -f /mnt/larchconf/accounts/shadow ]; then
-        ACCT="/mnt/larchconf/accounts"
-    fi
+    log "  accounts: $ACCT"
+else
+    log "  accounts: LARCHCONF not found, keeping the image default user"
 fi
 unset _conf
-log "  accounts: $ACCT"
 
 # /etc/passwd — replace any UID-1000 line from the squashfs default with the
 # installer-supplied entry (which has the correct username).
@@ -275,23 +274,17 @@ if [ "$USERNAME" != "larch" ]; then
     rm -rf "/mnt/root/home/larch" 2>/dev/null || true
 fi
 
-# /etc/fstab — mounts LARCHHOME at /home
-# The installer generates a fstab with the home partition mounted at /home
-# (the user's home directory is /home/<username> inside that partition).
-# systemd-fstab-generator turns this entry into home.mount after switch_root.
-if [ -f "$CFG/fstab" ]; then
-    mkdir -p /mnt/root/etc
-    cp "$CFG/fstab" /mnt/root/etc/fstab
-    # Create mount points so systemd doesn't have to
-    mkdir -p /mnt/root/etc/larch-conf
-    # Fallback home dir in the tmpfs upper layer — only visible if LARCHHOME
-    # is absent (the nofail fstab entry skips the mount); otherwise the
-    # /home mount hides it. Keeps login working without the partition.
-    mkdir -p "/mnt/root/home/$USERNAME"
-    chown 1000:1000 "/mnt/root/home/$USERNAME" 2>/dev/null || true
-    chmod 0750      "/mnt/root/home/$USERNAME"  2>/dev/null || true
-    log "  fstab: LARCHCONF → /etc/larch-conf, LARCHHOME → /home"
-fi
+# /etc/fstab is static and ships in the image (rootfs-overlay/etc/fstab);
+# systemd-fstab-generator turns it into etc-larch\x2dconf.mount, home.mount and
+# the LARCHCONF bind mounts after switch_root. Create the mount point so
+# systemd doesn't have to.
+mkdir -p /mnt/root/etc/larch-conf
+# Fallback home dir in the tmpfs upper layer — only visible if LARCHHOME is
+# absent (the nofail fstab entry skips the mount); otherwise the /home mount
+# hides it. Keeps login working without the partition.
+mkdir -p "/mnt/root/home/$USERNAME"
+chown 1000:1000 "/mnt/root/home/$USERNAME" 2>/dev/null || true
+chmod 0750      "/mnt/root/home/$USERNAME"  2>/dev/null || true
 
 log "Config applied"
 

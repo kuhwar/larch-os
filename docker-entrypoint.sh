@@ -546,6 +546,12 @@ run_stage 9 "assemble-iso — copy all files into ISO tree" && {
     # /etc/skel — seeded into home partition at install time
     cp -a "$ROOTFS_DIR/etc/skel/." "$ISO_ROOT/skel/" 2>/dev/null || true
 
+    # LARCHCONF stores — the installer copies each missing one onto LARCHCONF.
+    # .gitkeep only exists so git tracks the empty directories.
+    cp -a "$SCRIPT_DIR/larchconf-seed" "$ISO_ROOT/larchconf-seed"
+    rm -f "$ISO_ROOT/larchconf-seed/README.md"
+    find "$ISO_ROOT/larchconf-seed" -name .gitkeep -delete
+
     info "ISO tree assembled at $ISO_ROOT"
     du -sh "$ISO_ROOT"
 }

@@ -1,6 +1,28 @@
 # /etc/fstab — larch-os
-# This is the image-default fstab; the installer writes a per-machine fstab
-# (mounted at /home from LABEL=LARCHHOME, plus LARCHCONF and its bind mounts)
-# which the OS init applies on every boot, replacing this file.
-tmpfs  /tmp     tmpfs  defaults,nosuid,nodev  0  0
-tmpfs  /run     tmpfs  defaults,nosuid,nodev  0  0
+# Static and identical on every machine: partitions are found by label, so
+# nothing here is per-machine. Shipping it in the image means an upgrade brings
+# its new mounts along. /tmp is left to systemd's stock tmp.mount.
+
+# LARCHCONF: persistent, root-owned system config.
+LABEL=LARCHCONF                         /etc/larch-conf                         ext4   defaults,relatime,nofail         0  2
+
+# LARCHHOME: the user's home lives at /home/<username> on this partition.
+LABEL=LARCHHOME                         /home                                   ext4   defaults,relatime,nofail         0  2
+
+# Service state persisted on LARCHCONF: NetworkManager connections and state,
+# Bluetooth pairings, CUPS queues, AccountsService (language, avatar), the
+# journal (capped in journald.conf.d/10-larch.conf), brightness, rfkill and
+# timer stamps. Sources are created by the installer from the ISO's
+# larchconf-seed/; systemd-fstab-generator orders each bind after the
+# /etc/larch-conf mount, and each service waits for its own via
+# RequiresMountsFor (a drop-in, or implied upstream). x-systemd.mkdir where the
+# image doesn't ship the target directory.
+/etc/larch-conf/nm-system-connections   /etc/NetworkManager/system-connections  none   bind,nofail                      0  0
+/etc/larch-conf/cups                    /etc/cups/larch-state                   none   bind,nofail,x-systemd.mkdir      0  0
+/etc/larch-conf/nm-state                /var/lib/NetworkManager                 none   bind,nofail                      0  0
+/etc/larch-conf/bluetooth               /var/lib/bluetooth                      none   bind,nofail,x-systemd.mkdir      0  0
+/etc/larch-conf/accountsservice         /var/lib/AccountsService                none   bind,nofail                      0  0
+/etc/larch-conf/journal                 /var/log/journal                        none   bind,nofail                      0  0
+/etc/larch-conf/systemd-backlight       /var/lib/systemd/backlight              none   bind,nofail,x-systemd.mkdir      0  0
+/etc/larch-conf/systemd-rfkill          /var/lib/systemd/rfkill                 none   bind,nofail,x-systemd.mkdir      0  0
+/etc/larch-conf/systemd-timers          /var/lib/systemd/timers                 none   bind,nofail,x-systemd.mkdir      0  0

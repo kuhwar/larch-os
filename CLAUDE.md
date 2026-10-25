@@ -22,11 +22,11 @@ The **hostname** is not asked for either: it is derived as `<username>-<brand>-<
 
 It then **wipes the target disk** and creates **three partitions**:
 
-- **Partition 1 — boot/system.** Holds the bootloader, a tiny OS initramfs, `rootfs.squashfs` (the entire OS), and the per-machine configuration files (`fstab`, `hostname`, `hosts`, `username`, `machine-id`).
+- **Partition 1 — boot/system.** Holds the bootloader, a tiny OS initramfs, `rootfs.squashfs` (the entire OS), and the per-machine configuration files (`hostname`, `hosts`, `username`, `machine-id`).
 - **Partition 2 — config.** Mutable, root-owned system config (`/etc/larch-conf`): the user account files (`passwd`/`shadow`, root-only), NetworkManager connections, Bluetooth pairings, CUPS queues. Never touched by upgrades.
 - **Partition 3 — home.** Mounted at `/home`; the user's home directory is `/home/<username>`, persistent across upgrades.
 
-**Atomic upgrade model.** A future OS version is shipped as a **new ISO**. Upgrading means replacing `initramfs.img` and `rootfs.squashfs` on partition 1 and **re-linking the existing configuration files** — `fstab`, password, hostname, user, etc. are preserved, not regenerated. The user partition is never touched. This makes upgrades atomic and trivially rollback-able, and keeps all machine state on partition 1's config files rather than baked into the OS image.
+**Atomic upgrade model.** A future OS version is shipped as a **new ISO**. Upgrading means replacing `initramfs.img` and `rootfs.squashfs` on partition 1 and **re-linking the existing configuration files** — password, hostname, user, etc. are preserved, not regenerated. `/etc/fstab` is *not* per-machine: it is static in the image (`rootfs-overlay/etc/fstab`, partitions found by label), so an upgrade brings its new mounts along. The user partition is never touched. This makes upgrades atomic and trivially rollback-able, and keeps all machine state on partition 1's config files rather than baked into the OS image.
 
 **Deliberately minimal, locked-down configuration.** The system favors zero-decision defaults over flexibility:
 
@@ -55,7 +55,7 @@ make iso                       # → output/larch-os.iso   (alias for ./docker-b
 # Delete work/ and output ISO
 make clean                     # → ./docker-build.sh --clean
 
-# Install host-side tools for QEMU testing / dev-disk (NOT for building)
+# Install host-side tools for QEMU testing (NOT for building)
 sudo make install-deps
 ```
 
@@ -134,6 +134,7 @@ There are **two separate initramfs files** with distinct roles:
 /EFI/BOOT/BOOTX64.EFI            ← systemd-boot EFI binary (installer copies to LARCHOS)
 /loader/                          ← systemd-boot config (installer copies to LARCHOS)
 /skel/                            ← /etc/skel contents (installer seeds LARCHHOME)
+/larchconf-seed/                  ← LARCHCONF stores (installer copies the missing ones)
 /larch-os/vmlinuz                 ← kernel copy (installer copies to LARCHOS)
 /larch-os/initramfs.img           ← OS initramfs — tiny, no squashfs (installer copies)
 /larch-os/rootfs.squashfs         ← OS squashfs (installer copies to LARCHOS)
@@ -173,7 +174,6 @@ The installer writes these files to `LARCHOS:/larch-os/`:
 | `hosts` | `/etc/hosts` content |
 | `username` | plain username string (used by init to rename groups) |
 | `machine-id` | 32 hex digits — stable `/etc/machine-id`, generated once at install |
-| `fstab` | full `/etc/fstab` with `LABEL=LARCHCONF → /etc/larch-conf`, `LABEL=LARCHHOME → /home`, and NM bind mount |
 
 The account files go to `LARCHCONF:/accounts/` instead (dir `0700`, root-owned) — FAT32 has no permissions, so a `shadow` on LARCHOS would be readable by anyone who mounts the disk:
 
@@ -182,7 +182,7 @@ The account files go to `LARCHCONF:/accounts/` instead (dir `0700`, root-owned) 
 | `accounts/passwd` | single `/etc/passwd` line for UID 1000, GECOS = full name (mode 0644) |
 | `accounts/shadow` | single `/etc/shadow` line with SHA-512 hash (mode 0600) |
 
-The OS init mounts LARCHCONF **read-only** (`findfs LABEL=LARCHCONF`, ext4 modules loaded) just to read these, then unmounts it before `switch_root` so `systemd-fsck` can check it. If LARCHCONF or `accounts/` is missing, it falls back to `LARCHOS:/larch-os/{passwd,shadow}` (pre-move installs, `make-dev-disk.sh` disks). The installer's **update** path migrates those LARCHOS copies into `LARCHCONF:/accounts/` and deletes them from LARCHOS.
+The OS init mounts LARCHCONF **read-only** (`findfs LABEL=LARCHCONF`, ext4 modules loaded) just to read these, then unmounts it before `switch_root` so `systemd-fsck` can check it. If LARCHCONF or `accounts/` is missing, the image's default `larch` user is left in place.
 
 **Password changes persist via write-back**, not via links: `larch-persist-accounts.path` watches `/etc/passwd` and `/etc/shadow` (tmpfs) and runs `/usr/libexec/larch-persist-accounts`, which copies the UID-1000 lines to `/etc/larch-conf/accounts/` (atomic temp+rename, skipped if unchanged). This covers `passwd`, GNOME Settings (AccountsService → `usermod`) and full-name changes. Symlinking or bind-mounting `/etc/shadow` onto LARCHCONF does **not** work — tested on Trixie: `passwd`/`chpasswd` replace the symlink via rename, and `usermod` refuses a symlinked `/etc/passwd` (`cannot open /etc/passwd`).
 
@@ -192,21 +192,21 @@ The OS init re-applies these on every boot into the tmpfs upper layer:
 - **group**: `sed 's/\blarch\b/$USERNAME/g'` — renames group memberships to the installed username (word-boundary-safe)
 - **machine-id**: copies the installer value to `/etc/machine-id` (mode 0444). Without it, `/etc` being tmpfs means systemd would synthesise a *new* id every boot, so the machine would get a different DHCP lease/IP (the DHCP client-id / DHCPv6 DUID derive from machine-id) and a fresh journal identity on each boot. Generated once at install from the kernel UUID pool.
 - **timezone**: if `LARCHCONF:/timezone` exists, re-links `/etc/localtime` to `../usr/share/zoneinfo/<zone>` (only plain zone names that exist in the image; otherwise the image default, UTC). Time and timezone are automatic by default: `systemd-timesyncd` syncs the clock, and `rootfs-overlay/usr/share/glib-2.0/schemas/90_larch.gschema.override` turns on `automatic-timezone` and Location Services, so gsd-datetime sets the zone via `geoclue-2.0`. `rootfs-overlay/etc/polkit-1/rules.d/99-larch-datetime.rules` lets the active local session call timedated for this (`timedate1.set-timezone`/`set-ntp`/`set-time`, plus GNOME's `datetime.configure` to unlock the Date & Time page); `larch-persist-timezone.path` writes changes back. It watches `/etc` itself, not `/etc/localtime` — inotify follows the symlink to the read-only zoneinfo file, so a watch on the link never fires when timedated replaces it.
-- **fstab**: replaces `/etc/fstab`; `systemd-fstab-generator` turns the `LABEL=LARCHHOME → /home` entry into `home.mount`. The init also creates the `/etc/larch-conf` mount point and a fallback `/home/<username>` dir in the tmpfs upper layer (owned 1000:1000, mode 0750) — visible only if LARCHHOME is absent, since the mounted partition hides it otherwise
+- **fstab**: not touched — `/etc/fstab` is static in the image (`rootfs-overlay/etc/fstab`); `systemd-fstab-generator` turns it into `etc-larch\x2dconf.mount`, `home.mount` and the bind mounts. It has no `/tmp` or `/run` line: `/tmp` is Debian's stock `tmp.mount` (tmpfs, `size=50%`, `nr_inodes=1m`; a fstab line would override it), and PID 1 mounts `/run` itself. The init creates the `/etc/larch-conf` mount point and a fallback `/home/<username>` dir in the tmpfs upper layer (owned 1000:1000, mode 0750) — visible only if LARCHHOME is absent, since the mounted partition hides it otherwise
 
 ### `/home` and `/etc/larch-conf` persistence
 
-LARCHHOME is not mounted in initramfs, and LARCHCONF only briefly read-only (for the account files, see above). On an installed system, systemd mounts them via the generated fstab after `switch_root`.
+LARCHHOME is not mounted in initramfs, and LARCHCONF only briefly read-only (for the account files, see above). On an installed system, systemd mounts them via the static `/etc/fstab` after `switch_root`.
 
-### Persistent system config on LARCHCONF (WiFi, Bluetooth, printing)
+### Persistent system config on LARCHCONF (WiFi, Bluetooth, printing, journal, …)
 
 Several daemons keep their state under `/etc` or `/var`, both of which live in the tmpfs OverlayFS upper layer — anything they write there would be **discarded on every reboot**. The LARCHCONF partition (`/etc/larch-conf`, ext4, root-owned) is the persistent store for this kind of system config; each service is backed by it via a bind mount, following the same three-part pattern:
 
-1. **Installer seeds the store** (`installer/install.sh`, config-seeding block): creates a root-owned, `0700` directory at the root of LARCHCONF for the service.
-2. **Installer-generated fstab adds a bind line** from that LARCHCONF directory onto the service's live state path (`bind,nofail`, plus `x-systemd.mkdir` where the target isn't guaranteed to already exist). `systemd-fstab-generator` auto-orders the bind mount after the `/etc/larch-conf` mount.
+1. **A seed directory `larchconf-seed/<name>/`** (empty dirs kept in git via `.gitkeep`). Stage 9 copies the tree to `/larchconf-seed/` on the ISO, and the installer's `seed_larchconf` (`installer/lib/helpers.sh`) copies each top-level directory onto LARCHCONF **only if it doesn't exist there yet** — on clean install *and* update, so a new image can add a store without touching live state. ISO9660 drops modes, so it sets them: root-owned, dirs `0700` unless a sibling `larchconf-seed/<name>.mode` says otherwise (e.g. `accountsservice.mode` = `0755`), files the same minus execute.
+2. **A bind line in `rootfs-overlay/etc/fstab`** from that LARCHCONF directory onto the service's live state path (`bind,nofail`, plus `x-systemd.mkdir` where the target isn't guaranteed to already exist). `systemd-fstab-generator` auto-orders the bind mount after the `/etc/larch-conf` mount.
 3. **A static `RequiresMountsFor` drop-in in `rootfs-overlay/etc/systemd/system/<service>.service.d/`** holds the service until its bind mount is ready — otherwise it could write state into the tmpfs upper before persistence is wired up and lose it on reboot.
 
-Four services currently use this pattern:
+These stores currently use this pattern:
 
 | Service | LARCHCONF dir | Bind target | Drop-in |
 |---|---|---|---|
@@ -214,14 +214,22 @@ Four services currently use this pattern:
 | bluetoothd | `bluetooth/` | `/var/lib/bluetooth` | `bluetooth.service.d/10-persist-devices.conf` |
 | cupsd | `cups/` | `/etc/cups/larch-state` | `cups.service.d/10-persist-printers.conf` |
 | accounts-daemon | `accountsservice/` | `/var/lib/AccountsService` | `accounts-daemon.service.d/10-persist-users.conf` |
+| NetworkManager | `nm-state/` | `/var/lib/NetworkManager` | `NetworkManager.service.d/10-persist-connections.conf` |
+| journald | `journal/` | `/var/log/journal` | none — upstream `systemd-journal-flush.service` has `RequiresMountsFor=/var/log/journal` |
+| systemd-backlight@ | `systemd-backlight/` | `/var/lib/systemd/backlight` | none — implied by the unit's `StateDirectory=` |
+| systemd-rfkill | `systemd-rfkill/` | `/var/lib/systemd/rfkill` | none — implied by the unit's `StateDirectory=` |
+| all timers | `systemd-timers/` | `/var/lib/systemd/timers` | `timer.d/10-persist-stamps.conf` (unit-type drop-in, applies to every `.timer`) |
 
 Notes:
-- **NetworkManager**: only the **connection profiles** persist (enough to auto-reconnect). NM's volatile state in `/var/lib/NetworkManager/` (DHCP leases, seen-BSSID timestamps) still resets each boot — harmless for an immutable system. **VPN configurations persist for free** — GNOME/NetworkManager VPN connections are stored as keyfiles in the same `system-connections/` directory, so the bind mount covers them too (VPNs needing an out-of-tree plugin still require that plugin in the squashfs).
+- **NetworkManager**: the **connection profiles** persist (`nm-system-connections/`), and so does `/var/lib/NetworkManager/` (`nm-state/`): Wi-Fi on/off (`NetworkManager.state`), DHCP leases (same IP, faster reconnect), seen BSSIDs. With `systemd-rfkill/`, airplane mode survives a reboot. **VPN configurations persist for free** — GNOME/NetworkManager VPN connections are stored as keyfiles in the same `system-connections/` directory, so the bind mount covers them too (VPNs needing an out-of-tree plugin still require that plugin in the squashfs).
 - **Bluetooth**: `/var/lib/bluetooth` holds per-adapter pairing keys and device info; bluez doesn't ship this directory by default, hence `x-systemd.mkdir` on the fstab line.
 - **Printing (CUPS)**: only queue *state* persists — `printers.conf`, `classes.conf`, `subscriptions.conf`, and `ppd/` — not the daemon's static config (`cupsd.conf`, `cups-files.conf`, `mime.types`, `snmp.conf`, `client.conf`), which should always come fresh from the image on upgrade. `scripts/setup-chroot.sh` symlinks those four state paths to `larch-state/...` inside `/etc/cups/`, and LARCHCONF's `cups/` directory is bind-mounted onto `/etc/cups/larch-state` (not directly onto `/etc/cups`) so the daemon config stays image-owned. GNOME Settings' Printers panel talks to cupsd via `cups-pk-helper`'s polkit actions (`org.opensuse.cupspkhelper.mechanism.*`); since root is locked and there's no admin/sudo group, `rootfs-overlay/etc/polkit-1/rules.d/99-larch-cups.rules` grants those to the active local session, mirroring `99-larch-flatpak.rules`.
 - **AccountsService**: holds the user's **language** (GNOME Settings → Region & Language; GDM starts the session with it) and **avatar** (`icons/`). The seeded dir is `0755`, not `0700` like the others, since GDM's greeter reads avatars from it. The image ships every language: `setup-chroot.sh` compiles all of `/usr/share/i18n/SUPPORTED` into the locale archive, and `clean-rootfs.sh` keeps `/usr/share/locale` and translated help (only `/usr/share/i18n` source data is dropped) — about +100 MB in the squashfs. Region formats are a per-user GSettings key, so they persist in `/home` without this.
+- **Journal**: `/var/log/journal` exists in the image, so journald runs persistent; without the bind it would write into the tmpfs overlay, i.e. RAM. `rootfs-overlay/etc/systemd/journald.conf.d/10-larch.conf` caps it at `SystemMaxUse=64M`, since LARCHCONF is only 512 MiB and also holds the account files. The seed is `2755` (`journal.mode`); systemd's own `tmpfiles.d` sets its `systemd-journal` group and ACLs each boot.
+- **Timers**: only the last-run stamps of `Persistent=true` timers (`fstrim`, `logrotate`) live there, so they catch up after downtime. A `nofail` mount isn't ordered before `local-fs.target`, hence the `timer.d/` drop-in.
+- **Only bounded state goes on LARCHCONF.** Don't persist `/var/tmp` (unbounded — could fill LARCHCONF and break account write-back) or image-owned `/var` content (`/var/cache`, `/var/lib/gdm3`, `xml-core`, …), which would hide upgrades. Bind individual `/var/lib/systemd/*` subdirs, never all of `/var/lib/systemd` (it holds the image's `catalog/`).
 - **Adding future persistent config**: follow the same three-part pattern above. If the service's state files aren't isolated to one directory (like CUPS), symlink them into a dedicated subdirectory in `scripts/setup-chroot.sh` (after the package installs, so it isn't clobbered by dpkg) rather than persisting the whole config tree.
-- Rebuild after changing this: stage 3 (overlay drop-ins) + stage 4 (setup-chroot.sh changes, e.g. CUPS symlinks) + stage 8 (installer). Note the cached rootfs has apt stripped, so a drop-in-only change should use `--only 3` then `--stage 6` instead of `--stage 3`, to avoid the failing chroot-configure stage.
+- Rebuild after changing this: stage 3 (overlay fstab/drop-ins) + stage 4 (setup-chroot.sh changes, e.g. CUPS symlinks) + stage 8 (installer) + stage 9 (seed tree onto the ISO). Note the cached rootfs has apt stripped, so a drop-in-only change should use `--only 3` then `--stage 6` instead of `--stage 3`, to avoid the failing chroot-configure stage.
 
 ### Bootloader configs
 
@@ -246,7 +254,6 @@ Partition 1 — FAT32, 3 GiB, label LARCHOS
   larch-os/hosts
   larch-os/username
   larch-os/machine-id
-  larch-os/fstab
 
 Partition 2 — ext4, 512 MiB, label LARCHCONF   (mounted at /etc/larch-conf)
   accounts/passwd, shadow   (user account; read by OS init, written back by larch-persist-accounts)
@@ -255,6 +262,11 @@ Partition 2 — ext4, 512 MiB, label LARCHCONF   (mounted at /etc/larch-conf)
   bluetooth/                (bind-mounted over /var/lib/bluetooth)
   cups/                     (bind-mounted over /etc/cups/larch-state)
   accountsservice/          (bind-mounted over /var/lib/AccountsService)
+  nm-state/                 (bind-mounted over /var/lib/NetworkManager)
+  journal/                  (bind-mounted over /var/log/journal, capped at 64M)
+  systemd-backlight/        (bind-mounted over /var/lib/systemd/backlight)
+  systemd-rfkill/           (bind-mounted over /var/lib/systemd/rfkill)
+  systemd-timers/           (bind-mounted over /var/lib/systemd/timers)
 
 Partition 3 — ext4, remainder, label LARCHHOME   (mounted at /home)
   <username>/               (the user's home, seeded from /etc/skel at install time; persistent)
@@ -277,6 +289,7 @@ Partition 3 — ext4, remainder, label LARCHHOME   (mounted at /home)
 | `initramfs/modules.list` | Shared kernel module list used by both initramfs builds |
 | `installer/install.sh` | The installer, bundled into the installer initramfs as `/usr/sbin/larch-install`. Prompts, partitions, copies OS files to LARCHOS, seeds home, reboots |
 | `rootfs-overlay/` | Files copied verbatim into rootfs at stage 3; mirror the target path |
+| `larchconf-seed/` | Initial LARCHCONF stores (bind-mount sources); copied to the ISO at stage 9, each missing top-level dir copied onto LARCHCONF by the installer |
 
 ## Common customisation patterns
 

@@ -2,8 +2,8 @@
 # Sourced by install.sh; not executable on its own.
 
 # Replace the OS payload + bootloader on an existing LARCHOS partition, preserving
-# the per-machine config files (hostname, hosts, passwd, shadow, username,
-# machine-id, fstab) and the LARCHHOME partition. No partitioning, no formatting.
+# the per-machine config files (hostname, hosts, username, machine-id), the
+# LARCHCONF stores and the LARCHHOME partition. No partitioning, no formatting.
 do_update() {
     _osdev="$1"
     if [ "$AUTO_YES" -ne 1 ]; then
@@ -52,23 +52,16 @@ do_update() {
     cp "$ISO_MOUNT/larch-os/rootfs.squashfs" "$MOUNT_OS/larch-os/rootfs.squashfs"
     sync
 
-    # Older installs kept passwd/shadow on LARCHOS (FAT32, hash readable by
-    # anyone who mounts it). Move them to LARCHCONF's root-only accounts/ dir,
-    # unless LARCHCONF already has them. Without a LARCHCONF partition they stay
-    # put — the OS init falls back to reading them from LARCHOS.
+    # Create the LARCHCONF stores this image's fstab binds that the disk doesn't
+    # have yet; existing ones (and their contents) are left alone.
     _confdev=$(find_larchconf_part "$(basename "$TARGET_DISK")" || true)
-    if [ -n "$_confdev" ] && [ -f "$MOUNT_OS/larch-os/shadow" ]; then
-        show_step "Moving account files to LARCHCONF ($_confdev)"
-        mkdir -p "$MOUNT_CONF"
-        mount_or_die ext4 "$_confdev" "$MOUNT_CONF"
-        if [ ! -f "$MOUNT_CONF/accounts/shadow" ]; then
-            seed_accounts "$MOUNT_CONF" "$MOUNT_OS/larch-os/passwd" "$MOUNT_OS/larch-os/shadow"
-        fi
-        sync
-        umount "$MOUNT_CONF"
-        rm -f "$MOUNT_OS/larch-os/passwd" "$MOUNT_OS/larch-os/shadow"
-        sync
-    fi
+    [ -n "$_confdev" ] || die "No LARCHCONF partition on $TARGET_DISK"
+    show_step "Seeding new config stores on LARCHCONF ($_confdev)"
+    mkdir -p "$MOUNT_CONF"
+    mount_or_die ext4 "$_confdev" "$MOUNT_CONF"
+    seed_larchconf "$MOUNT_CONF"
+    sync
+    umount "$MOUNT_CONF"
 
     umount "$MOUNT_OS"
     trap - EXIT
