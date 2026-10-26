@@ -135,6 +135,20 @@ flatpak search chromium
 > `~/.local/share/flatpak` on your `/home`. (A system-wide install via `flatpak --system`
 > would be wiped on the next reboot, so avoid it.)
 
+### AppImages
+
+[AppImages](https://appimage.org/) work too — keep them anywhere in your home (e.g.
+`~/Applications`), make them executable, and run them:
+
+```bash
+chmod +x ~/Applications/Some-App.AppImage
+~/Applications/Some-App.AppImage
+```
+
+To get AppImages into the app grid with icons, install
+[Gear Lever](https://flathub.org/apps/it.mijorus.gearlever) from Flathub
+(`flatpak install flathub it.mijorus.gearlever`) and open them with it.
+
 ## How it works (and what persists)
 
 - **The OS is read-only.** System files come from a compressed image and cannot be
@@ -163,7 +177,7 @@ top item on the [Roadmap](#roadmap).
 - **One user.** The account created during install is the only one; there's no way to add
   or remove users afterward.
 - **Networking is automatic (DHCP) only.** There's no network configuration UI.
-- **Apps via Flatpak only.** No `apt`, no system package manager.
+- **Apps via Flatpak (or AppImage) only.** No `apt`, no system package manager.
 - **No reliable in-place upgrades yet** — full install required (see above).
 
 ## Roadmap

@@ -93,6 +93,13 @@ xdg-desktop-portal-gnome
 xdg-utils
 xdg-user-dirs
 
+# ── AppImage ─────────────────────────────────────────────────────────────────
+# AppImages are self-mounting executables the user keeps in /home, so they fit
+# the immutable model without touching the base OS. Most still embed the classic
+# type-2 runtime, which dlopen()s libfuse.so.2; the setuid fusermount it calls
+# already comes from fuse3 (via gvfs-fuse), symlinked as /usr/bin/fusermount.
+libfuse2t64
+
 # ── Audio ────────────────────────────────────────────────────────────────────
 pipewire
 pipewire-pulse
