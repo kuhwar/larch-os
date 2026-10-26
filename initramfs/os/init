@@ -268,6 +268,14 @@ umount /mnt/larchconf 2>/dev/null || true
 if [ "$USERNAME" != "larch" ]; then
     mkdir -p /mnt/root/etc
     sed "s/\blarch\b/$USERNAME/g" /mnt/squashfs/etc/group > /mnt/root/etc/group || true
+    # /etc/subuid, /etc/subgid — move the default user's subordinate ID range
+    # (adduser assigns larch:100000:65536) to the installed username, so
+    # newuidmap/newgidmap allow it for rootless containers.
+    for _f in subuid subgid; do
+        [ -f "/mnt/squashfs/etc/$_f" ] || continue
+        sed "s/^larch:/$USERNAME:/" "/mnt/squashfs/etc/$_f" > "/mnt/root/etc/$_f" || true
+    done
+    unset _f
     # Hide the build-time default user's home (/home/larch from the squashfs).
     # rm against the overlay mount records a whiteout in the tmpfs upper layer;
     # the read-only squashfs lower layer is untouched.

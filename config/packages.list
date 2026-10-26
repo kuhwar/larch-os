@@ -100,6 +100,14 @@ xdg-user-dirs
 # already comes from fuse3 (via gvfs-fuse), symlinked as /usr/bin/fusermount.
 libfuse2t64
 
+# ── Rootless containers ──────────────────────────────────────────────────────
+# Podman itself is not in the image — the user installs a static build into
+# ~/.local when needed. What can't live in /home are the setuid newuidmap/
+# newgidmap helpers, which map the user's /etc/subuid + /etc/subgid range into
+# a user namespace so multi-user images (postgres, nginx, …) can switch users.
+# Container root is still the user's own UID; nothing maps to host root.
+uidmap
+
 # ── Audio ────────────────────────────────────────────────────────────────────
 pipewire
 pipewire-pulse
