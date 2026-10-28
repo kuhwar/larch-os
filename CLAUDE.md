@@ -88,8 +88,8 @@ sudo make install-deps
 ### Test in QEMU
 
 ```bash
-make test-qemu               # boot ISO with UEFI (requires ovmf + qemu-system-x86)
-make test-qemu-install       # boot ISO + blank 20G qcow2 disk for install testing
+make test-qemu               # ISO + 20G qcow2 disk, full screen; installs if the disk is blank, else boots it
+                             # (rm work/test-disk.img to reinstall; requires ovmf + qemu-system-x86)
 ```
 
 ## Architecture

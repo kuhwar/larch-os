@@ -9,13 +9,6 @@ SUDO      := sudo
 BUILD     := ./docker-build.sh
 OUTPUT    := output/larch-os.iso
 
-# QEMU display/VGA settings — overridable per machine.
-# Default is the most portable combo (no host GL). Intel/Mesa hosts can opt back
-# into virgl acceleration with:  make test-qemu QEMU_VGA=virtio QEMU_DISPLAY=gtk,gl=on
-# NVIDIA proprietary/nouveau hosts black-screen with gl=on, so it is OFF here.
-QEMU_VGA     ?= std
-QEMU_DISPLAY ?= gtk,gl=off
-
 .DEFAULT_GOAL := iso
 
 ## ── Main targets ─────────────────────────────────────────────────────────────
@@ -68,23 +61,11 @@ docker-shell: ## Open a shell inside the builder container
 
 ## ── Testing ──────────────────────────────────────────────────────────────────
 
+# One target for install and boot: the disk is first in the boot order, so a
+# blank disk falls through to the ISO (installer) and an installed one boots
+# the system. Delete work/test-disk.img to test a fresh install again.
 .PHONY: test-qemu
-test-qemu: ## Boot installed disk in QEMU with UEFI (run test-qemu-install first)
-	@[ -f work/test-disk.img ] || { echo "No work/test-disk.img — run 'make test-qemu-install' first to install"; exit 1; }
-	qemu-system-x86_64 \
-	    -enable-kvm \
-	    -m 4G \
-	    -cpu host \
-	    -smp 2 \
-	    -bios /usr/share/ovmf/OVMF.fd \
-	    -drive file=work/test-disk.img,format=qcow2,if=virtio \
-	    -vga $(QEMU_VGA) \
-	    -display $(QEMU_DISPLAY) \
-	    -device virtio-net,netdev=net0 \
-	    -netdev user,id=net0
-
-.PHONY: test-qemu-install
-test-qemu-install: ## Test installation: boot ISO + attach a blank 20G disk
+test-qemu: ## Boot ISO + 20G test disk in QEMU (UEFI); installs if the disk is blank, else boots it
 	@[ -f "$(OUTPUT)" ] || { echo "Run 'make iso' first"; exit 1; }
 	@[ -f work/test-disk.img ] || \
 	    qemu-img create -f qcow2 work/test-disk.img 20G
@@ -94,52 +75,12 @@ test-qemu-install: ## Test installation: boot ISO + attach a blank 20G disk
 	    -cpu host \
 	    -smp 2 \
 	    -bios /usr/share/ovmf/OVMF.fd \
-	    -cdrom $(OUTPUT) \
-	    -drive file=work/test-disk.img,format=qcow2,if=virtio \
-	    -vga $(QEMU_VGA) \
-	    -display $(QEMU_DISPLAY) \
+	    -drive file=work/test-disk.img,format=qcow2,if=none,id=disk \
+	    -device virtio-blk-pci,drive=disk,bootindex=0 \
+	    -drive file=$(OUTPUT),media=cdrom,readonly=on,if=none,id=cd \
+	    -device ide-cd,drive=cd,bootindex=1 \
+	    -vga virtio \
+	    -display gtk,gl=off \
+	    -full-screen \
 	    -device virtio-net,netdev=net0 \
 	    -netdev user,id=net0
-
-.PHONY: test-qemu-install-usb
-test-qemu-install-usb: ## Like test-qemu-install but with a USB keyboard+mouse (exercises the USB-HID module fix)
-	@[ -f "$(OUTPUT)" ] || { echo "Run 'make iso' first"; exit 1; }
-	@[ -f work/test-disk.img ] || \
-	    qemu-img create -f qcow2 work/test-disk.img 20G
-	qemu-system-x86_64 \
-	    -enable-kvm \
-	    -m 4G \
-	    -cpu host \
-	    -smp 2 \
-	    -bios /usr/share/ovmf/OVMF.fd \
-	    -cdrom $(OUTPUT) \
-	    -drive file=work/test-disk.img,format=qcow2,if=virtio \
-	    -device qemu-xhci,id=xhci \
-	    -device usb-kbd,bus=xhci.0 \
-	    -device usb-mouse,bus=xhci.0 \
-	    -vga $(QEMU_VGA) \
-	    -display $(QEMU_DISPLAY) \
-	    -device virtio-net,netdev=net0 \
-	    -netdev user,id=net0
-
-.PHONY: test-qemu-disk
-test-qemu-disk: ## Boot the INSTALLED disk only (no ISO) — tests the real installed system
-	@[ -f work/test-disk.img ] || { echo "No work/test-disk.img — run 'make test-qemu-install' first to install"; exit 1; }
-	qemu-system-x86_64 \
-	    -enable-kvm \
-	    -m 4G \
-	    -cpu host \
-	    -smp 2 \
-	    -bios /usr/share/ovmf/OVMF.fd \
-	    -drive file=work/test-disk.img,format=qcow2,if=virtio \
-	    -vga $(QEMU_VGA) \
-	    -display $(QEMU_DISPLAY) \
-	    -device virtio-net,netdev=net0 \
-	    -netdev user,id=net0
-
-## ── Info ─────────────────────────────────────────────────────────────────────
-
-.PHONY: help
-help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
-	    awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
