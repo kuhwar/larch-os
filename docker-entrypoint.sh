@@ -12,10 +12,11 @@
 #   1.  check-deps          — verify build tools
 #   2.  debootstrap         — create Debian Trixie minimal rootfs (larch OS)
 #   3.  copy-overlay        — merge rootfs-overlay/ into rootfs
-#   4.  chroot-configure    — run scripts/setup-chroot.sh inside chroot
+#   4.  chroot-configure    — fetch the kernel (scripts/fetch-kernel.sh), then
+#                             run scripts/setup-chroot.sh inside chroot
 #   5.  clean-rootfs        — strip package manager (scripts/clean-rootfs.sh)
-#   6.  make-squashfs       — compress rootfs into rootfs.squashfs
-#   7.  build-os-initramfs  — build the larch OS initramfs (squashfs is separate)
+#   6.  make-squashfs       — compress rootfs into rootfs.squashfs (the installer unpacks it)
+#   7.  (skipped)           — no OS initramfs: the kernel mounts LARCHSYS itself
 #   8.  build-installer     — build the installer initramfs (mounts ISO, runs install.sh)
 #   9.  assemble-iso        — copy all pieces into work/iso/
 #   10. make-iso            — run grub-mkrescue to produce larch-os.iso (UEFI only)
@@ -33,7 +34,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK_DIR="$SCRIPT_DIR/work"
 ROOTFS_DIR="$WORK_DIR/rootfs"
 SQUASHFS_FILE="$WORK_DIR/rootfs.squashfs"
-OS_INITRAMFS_FILE="$WORK_DIR/os-initramfs.img"
+KERNEL_CACHE="$SCRIPT_DIR/kernel-cache"
 INSTALLER_INITRAMFS_FILE="$WORK_DIR/installer-initramfs.img"
 ISO_ROOT="$WORK_DIR/iso"
 OUTPUT_ISO="${LARCH_OUTPUT_ISO:-$SCRIPT_DIR/larch-os.iso}"
@@ -224,46 +225,6 @@ mnt/iso,run,tmp}
     mkdir -p "$build_dir/etc/modprobe.d"
 }
 
-build_initramfs() {
-    # Build a bootable gzipped cpio initramfs from <src_dir>.
-    # If the tree contains rootfs.squashfs it is packed two-pass (raw squashfs
-    # cpio first, gzip base second); otherwise a single gzip pass.
-    local src_dir="$1" out_file="$2" label="$3" extras_dir="${4:-}"
-    local build_dir="$WORK_DIR/initramfs-build-$label"
-    populate_initramfs_tree "$src_dir" "$build_dir" "$label"
-
-    if [ -n "$extras_dir" ] && [ -d "$extras_dir" ]; then
-        info "[$label] Merging extras from $(basename "$extras_dir")"
-        cp -a "$extras_dir/." "$build_dir/"
-    fi
-
-    info "[$label] Packing cpio → $out_file"
-    rm -f "$out_file"
-    if [ -f "$build_dir/rootfs.squashfs" ]; then
-        # Two-pass pack: squashfs is already zstd-compressed, re-gzipping wastes CPU.
-        # ORDER MATTERS: the raw (uncompressed) cpio MUST come first, the gzip cpio
-        # second. The kernel's early-cpio concatenation requires this order.
-        info "[$label] Pass 1: appending rootfs.squashfs raw (pre-compressed)"
-        sync
-        (cd "$build_dir" && echo "./rootfs.squashfs" | \
-            cpio --create --format=newc --quiet) > "$out_file"
-        local sqsz p1sz
-        sqsz=$(stat -c %s "$build_dir/rootfs.squashfs")
-        p1sz=$(stat -c %s "$out_file")
-        [ "$p1sz" -ge "$sqsz" ] || \
-            die "[$label] Pass 1 truncated: cpio is $p1sz bytes but rootfs.squashfs is $sqsz — squashfs not embedded"
-        info "[$label] Pass 2: compressing base files"
-        (cd "$build_dir" && find . ! -name "rootfs.squashfs" | \
-            cpio --create --format=newc --quiet) | gzip -9 >> "$out_file"
-    else
-        (cd "$build_dir" && find . | cpio --create --format=newc --quiet) | \
-            gzip -9 > "$out_file"
-    fi
-    local sz
-    sz=$(du -sh "$out_file" | cut -f1)
-    info "[$label] Done: $(basename "$out_file") ($sz)"
-}
-
 build_installer_initramfs() {
     local src_dir="$SCRIPT_DIR/initramfs/installer"
     local build_dir="$WORK_DIR/installer-initramfs-build"
@@ -293,9 +254,9 @@ build_installer_initramfs() {
     # Copy tool binaries from larch OS rootfs with their shared libraries.
     # These tools are not in busybox: sfdisk (partitioning), wipefs (disk wipe),
     # mkfs.fat (FAT32 format), mkfs.ext4 (ext4 format), openssl (password hash),
-    # blockdev (re-read partition table).
+    # blockdev (re-read partition table), unsquashfs (unpack the OS onto LARCHSYS).
     info "[installer] Copying tool binaries from larch OS rootfs"
-    for bin in sfdisk wipefs mkfs.fat mkfs.ext4 openssl blockdev; do
+    for bin in sfdisk wipefs mkfs.fat mkfs.ext4 openssl blockdev unsquashfs; do
         copy_bin_with_libs "$bin" "$build_dir"
     done
 
@@ -442,12 +403,30 @@ run_stage 4 "chroot-configure — install packages and configure system" && {
     mount --bind /dev  "$ROOTFS_DIR/dev"
     mount --bind /dev/pts "$ROOTFS_DIR/dev/pts"
 
+    # The image's resolv.conf is a symlink into /run (set below); replace it
+    # with the builder's for apt, without following the link.
+    rm -f "$ROOTFS_DIR/etc/resolv.conf"
     cp /etc/resolv.conf "$ROOTFS_DIR/etc/resolv.conf"
+
+    # Custom kernel with the root-mount drivers built in (no initramfs on the
+    # installed system), built and released by the larch-kernel repo. Cached in
+    # kernel-cache/; setup-chroot.sh installs the .debs from /kernel-debs
+    # before the package list.
+    "$SCRIPT_DIR/scripts/fetch-kernel.sh" "$KERNEL_CACHE"
+    rm -rf "$ROOTFS_DIR/kernel-debs"
+    mkdir -p "$ROOTFS_DIR/kernel-debs"
+    cp "$KERNEL_CACHE"/*.deb "$ROOTFS_DIR/kernel-debs/"
 
     chroot_run_with_deps \
         "$SCRIPT_DIR/scripts/setup-chroot.sh" \
         "$SCRIPT_DIR/config/packages.list" \
         "$SCRIPT_DIR/config/remove.list"
+    rm -rf "$ROOTFS_DIR/kernel-debs"
+
+    # Root is mounted read-only, so NetworkManager can't rewrite
+    # /etc/resolv.conf; point it at the file NM keeps in /run.
+    rm -f "$ROOTFS_DIR/etc/resolv.conf"
+    ln -s ../run/NetworkManager/resolv.conf "$ROOTFS_DIR/etc/resolv.conf"
 
     info "Unmounting pseudo-filesystems"
     umount -lf "$ROOTFS_DIR/dev/pts" 2>/dev/null || true
@@ -481,14 +460,13 @@ run_stage 6 "make-squashfs — compress rootfs into squashfs image" && {
     info "Squashfs created: $SQUASHFS_FILE ($sz)"
 }
 
-# ── Stage 7: build-os-initramfs ──────────────────────────────────────────────
-run_stage 7 "build-os-initramfs — build the larch OS initramfs" && {
-    [ -f "$SQUASHFS_FILE" ] || \
-        die "rootfs.squashfs not found ($SQUASHFS_FILE) — run stage 6 first"
-
-    # squashfs is stored as a separate file on the LARCHOS partition and
-    # loop-mounted at boot — it is not embedded in the initramfs.
-    build_initramfs "$SCRIPT_DIR/initramfs/os" "$OS_INITRAMFS_FILE" "os"
+# ── Stage 7: (no OS initramfs) ───────────────────────────────────────────────
+# The installed system boots without an initramfs: the kernel has the ext4 and
+# disk drivers built in (larch-kernel repo, scripts/fetch-kernel.sh) and mounts
+# root=PARTLABEL=LARCHSYS read-only itself. The stage number is kept so the
+# later stages keep their numbers.
+run_stage 7 "build-os-initramfs — skipped, the installed system has no initramfs" && {
+    info "Nothing to do"
 }
 
 # ── Stage 8: build-installer ─────────────────────────────────────────────────
@@ -522,24 +500,21 @@ run_stage 9 "assemble-iso — copy all files into ISO tree" && {
         die "Installer initramfs not found — run stage 8 first"
     cp "$INSTALLER_INITRAMFS_FILE" "$ISO_ROOT/installer-initramfs.img"
 
-    # Larch OS to be installed — the installer copies these to the target disk
-    [ -f "$OS_INITRAMFS_FILE" ] || \
-        die "OS initramfs not found — run stage 7 first"
+    # Larch OS to be installed — the installer unpacks the squashfs onto the
+    # LARCHSYS partition and copies the kernel to the EFI partition
     [ -f "$SQUASHFS_FILE" ] || \
         die "rootfs.squashfs not found — run stage 6 first"
-    cp "$OS_INITRAMFS_FILE" "$ISO_ROOT/larch-os/initramfs.img"
     cp "$SQUASHFS_FILE"     "$ISO_ROOT/larch-os/rootfs.squashfs"
     cp "$VMLINUZ"           "$ISO_ROOT/larch-os/vmlinuz"
 
-    # Bootloader files for the installed disk — installer copies these to LARCHOS
+    # Bootloader files for the installed disk — installer copies these to LARCHEFI
     EFI_BIN="$(find_efi_bin)"
     [ -f "$EFI_BIN" ] || die "systemd-boot EFI binary not found in rootfs"
     cp "$EFI_BIN" "$ISO_ROOT/EFI/BOOT/BOOTX64.EFI"
     cp "$SCRIPT_DIR/bootloader/loader.conf"              "$ISO_ROOT/loader/loader.conf"
     cp "$SCRIPT_DIR/bootloader/entries/larch.conf"       "$ISO_ROOT/loader/entries/larch.conf"
     # Second, non-default entry: verbose console logging for diagnosing boot
-    # failures (larch.debug keeps init output on /dev/console; quiet/splash and
-    # the systemd/udev status suppressors are dropped). Not the default — the
+    # failures (quiet/splash and the systemd/udev status suppressors are dropped). Not the default — the
     # menu stays hidden behind timeout 0; hold a key (Space) at power-on to pick.
     cp "$SCRIPT_DIR/bootloader/entries/larch-debug.conf" "$ISO_ROOT/loader/entries/larch-debug.conf"
 
@@ -572,7 +547,7 @@ run_stage 10 "make-iso — produce larch-os.iso via grub-mkrescue" && {
 
     # LARCHISO is the ISO9660 volume label. The installer init finds the USB medium
     # by this label using findfs/blkid. Use a different label than the installed
-    # FAT32 partition (LARCHOS) to avoid any blkid ambiguity.
+    # FAT32 partition (LARCHEFI) to avoid any blkid ambiguity.
     grub-mkrescue -d "$GRUB_EFI_DIR" -o "$OUTPUT_ISO" "$ISO_ROOT" -- -volid LARCHISO 2>/dev/null || \
         grub-mkrescue -d "$GRUB_EFI_DIR" -o "$OUTPUT_ISO" "$ISO_ROOT"
 

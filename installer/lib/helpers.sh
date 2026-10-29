@@ -2,11 +2,15 @@
 # Sourced by install.sh; not executable on its own.
 
 ISO_MOUNT="/mnt/iso"
-OS_PART_SIZE="3GiB"
-CONF_PART_SIZE="512MiB"
+EFI_PART_SIZE="512MiB"
+SYS_PART_SIZE="8GiB"
+# LARCHCONF holds all of /var (journal capped at 64M, Flatpak system installs
+# excluded — those go to --user in /home), so it is larger than on master.
+CONF_PART_SIZE="1GiB"
 TARGET_DISK=""
 AUTO_YES=0
-MOUNT_OS="/run/larch-target-os"
+MOUNT_EFI="/run/larch-target-efi"
+MOUNT_SYS="/run/larch-target-sys"
 MOUNT_CONF="/run/larch-target-conf"
 MOUNT_HOME="/run/larch-target-home"
 
@@ -37,6 +41,50 @@ seed_accounts() {
     chown 0:0 "$1/accounts/passwd" "$1/accounts/shadow"
     chmod 0644 "$1/accounts/passwd"
     chmod 0600 "$1/accounts/shadow"
+}
+
+# Write this machine's config into the unpacked OS (a mounted LARCHSYS), which
+# is read-only at runtime: hostname, hosts, machine-id, and the user account in
+# place of the image's UID-1000 placeholder "larch". `cat >` rewrites each file
+# in place, so it keeps the image's owner and mode (e.g. shadow: root:shadow 0640).
+# Usage: apply_machine_config <root> <config-dir> <username>
+apply_machine_config() {
+    _root="$1"; _cfg="$2"; _user="$3"
+
+    cat "$_cfg/hostname"   > "$_root/etc/hostname"
+    cat "$_cfg/hosts"      > "$_root/etc/hosts"
+    cat "$_cfg/machine-id" > "$_root/etc/machine-id"
+    chmod 0444 "$_root/etc/machine-id"
+
+    # passwd: drop any UID-1000 line, append the installed user.
+    grep -v '^[^:]*:[^:]*:1000:' "$_root/etc/passwd" > "$_cfg/passwd.new" || true
+    cat "$_cfg/passwd" >> "$_cfg/passwd.new"
+    cat "$_cfg/passwd.new" > "$_root/etc/passwd"
+    # shadow: drop the placeholder's entry, append the hashed installer entry.
+    grep -v "^larch:\|^${_user}:" "$_root/etc/shadow" > "$_cfg/shadow.new" || true
+    cat "$_cfg/shadow" >> "$_cfg/shadow.new"
+    cat "$_cfg/shadow.new" > "$_root/etc/shadow"
+    rm -f "$_cfg/passwd.new" "$_cfg/shadow.new"
+
+    if [ "$_user" != "larch" ]; then
+        # Group memberships (word-boundary-safe) and the subordinate ID range
+        # for rootless containers move to the installed username.
+        for _f in group gshadow; do
+            [ -f "$_root/etc/$_f" ] || continue
+            sed "s/\blarch\b/$_user/g" "$_root/etc/$_f" > "$_cfg/$_f.new"
+            cat "$_cfg/$_f.new" > "$_root/etc/$_f"
+            rm -f "$_cfg/$_f.new"
+        done
+        for _f in subuid subgid; do
+            [ -f "$_root/etc/$_f" ] || continue
+            sed "s/^larch:/$_user:/" "$_root/etc/$_f" > "$_cfg/$_f.new"
+            cat "$_cfg/$_f.new" > "$_root/etc/$_f"
+            rm -f "$_cfg/$_f.new"
+        done
+        # The build-time placeholder's home; /home is LARCHHOME at runtime anyway.
+        rm -rf "$_root/home/larch"
+    fi
+    unset _root _cfg _user _f
 }
 
 # Copy each top-level directory of the ISO's larchconf-seed/ onto a mounted
@@ -100,7 +148,8 @@ dialog --print-maxsize >/dev/null 2>&1 \
     || die "dialog cannot initialise the terminal (TERM=$TERM, TERMINFO=$TERMINFO)"
 
 cleanup() {
-    umount "$MOUNT_OS"   2>/dev/null || true
+    umount "$MOUNT_EFI"  2>/dev/null || true
+    umount "$MOUNT_SYS"  2>/dev/null || true
     umount "$MOUNT_CONF" 2>/dev/null || true
     umount "$MOUNT_HOME" 2>/dev/null || true
     # The dialog scratch file briefly holds the typed password — remove it.

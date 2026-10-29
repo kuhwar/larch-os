@@ -18,6 +18,7 @@ set -euo pipefail
 IMAGE_NAME="larch-os-builder"
 OUTPUT_DIR="$(pwd)/output"
 WORK_DIR="$(pwd)/work"   # shared build cache in dev mode
+KERNEL_CACHE="$(pwd)/kernel-cache"   # downloaded kernel .debs — survives --clean
 
 DEV_MODE=0
 SHELL_MODE=0
@@ -71,6 +72,15 @@ DOCKER_RUN_ARGS=(
 # survives across container runs and --stage N actually resumes correctly.
 mkdir -p "$WORK_DIR"
 DOCKER_RUN_ARGS+=(-v "$WORK_DIR:/build/work")
+
+# The kernel .debs (scripts/fetch-kernel.sh, from the larch-kernel releases)
+# live outside work/ and are kept across --clean. LARCH_KERNEL_REPO /
+# LARCH_KERNEL_TAG pick another repo or pin a release.
+mkdir -p "$KERNEL_CACHE"
+DOCKER_RUN_ARGS+=(-v "$KERNEL_CACHE:/build/kernel-cache")
+for _var in LARCH_KERNEL_REPO LARCH_KERNEL_TAG; do
+    [ -n "${!_var:-}" ] && DOCKER_RUN_ARGS+=(-e "$_var=${!_var}")
+done
 
 if [ "$DEV_MODE" -eq 1 ]; then
     # Also bind-mount the full source so edits are reflected without rebuilding the image.

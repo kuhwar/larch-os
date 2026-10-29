@@ -3,7 +3,9 @@
 # Processed by scripts/setup-chroot.sh
 
 # ── Base / boot ──────────────────────────────────────────────────────────────
-linux-image-amd64
+# Kernel: not from this list — the larch-kernel repo rebuilds Debian's kernel with
+# the root-mount drivers built in (no initramfs); scripts/fetch-kernel.sh downloads
+# it and setup-chroot.sh installs it.
 systemd
 systemd-sysv
 udev
@@ -171,6 +173,8 @@ fonts-liberation
 dosfstools
 e2fsprogs
 systemd-boot
+# unsquashfs: the installer unpacks rootfs.squashfs onto the LARCHSYS partition.
+squashfs-tools
 # dialog drives the installer's full-screen configuration form (ncurses). Copied
 # into the installer initramfs in stage 8; the installer falls back to plain text
 # prompts if it (or a terminfo entry) is absent.
@@ -193,8 +197,8 @@ firmware-mediatek
 # `nvidia-drm.modeset=1` kernel arg in bootloader/entries/larch.conf, which is
 # also what makes GDM offer the Wayland session (61-gdm.rules disables Wayland
 # when the NVIDIA driver is loaded without modeset). It builds its kernel module
-# via nvidia-kernel-dkms at stage 4 (needs linux-headers-amd64, present below for
-# broadcom) and ships its own nouveau blacklist in /etc/modprobe.d. On machines
+# via nvidia-kernel-dkms at stage 4 (against the larch kernel's headers, installed
+# by setup-chroot.sh) and ships its own nouveau blacklist in /etc/modprobe.d. On machines
 # without an NVIDIA GPU the module simply never loads — harmless, same as
 # broadcom-sta below. Mesa stays installed for those machines; GLVND dispatches
 # to the right driver at runtime.
@@ -209,8 +213,6 @@ firmware-mediatek
 
 # ── Broadcom BCM4360 WiFi (2015 MacBook Air) ─────────────────────────────────
 # BCM4360 (14e4:43a0) has no open-source driver. broadcom-sta-dkms provides the
-# proprietary wl.ko. linux-headers-amd64 is required for the DKMS build during
-# stage 4 (also used by nvidia-kernel-dkms above); it is removed by
-# clean-rootfs.sh after the modules are compiled.
+# proprietary wl.ko, built by DKMS at stage 4 against the larch kernel's headers
+# (installed by setup-chroot.sh; clean-rootfs.sh removes them afterwards).
 broadcom-sta-dkms
-linux-headers-amd64

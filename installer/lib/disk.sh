@@ -15,43 +15,32 @@ human_size() {
     fi
 }
 
-# Is this partition a larch-os system partition? The installer formats LARCHOS as
-# FAT32 with `mkfs.fat -n LARCHOS`, which writes the 11-byte volume label into the
+# Is this partition a larch-os EFI partition? The installer formats LARCHEFI as
+# FAT32 with `mkfs.fat -n LARCHEFI`, which writes the 11-byte volume label into the
 # boot sector at offset 71 (FAT BS_VolLab). busybox has no `blkid`, so read it raw
 # with dd — this needs no mount and works per-partition (findfs only resolves a
 # label to a single device, so it can't tell which disk owns it).
-part_is_larchos() {
+part_is_larchefi() {
     [ -b "$1" ] || return 1
     _lbl=$(dd if="$1" bs=1 skip=71 count=11 2>/dev/null | tr -d ' \000')
-    [ "$_lbl" = "LARCHOS" ]
+    [ "$_lbl" = "LARCHEFI" ]
 }
 
-# Echo the /dev path of the LARCHOS partition on a disk (by sysfs name, e.g. sda),
-# or nothing. Partition sysfs dirs are prefixed with the disk name (sda1, nvme0n1p1).
-find_larchos_part() {
+# Does a disk (by sysfs name, e.g. sda) hold a larch-os install? Partition sysfs
+# dirs are prefixed with the disk name (sda1, nvme0n1p1).
+disk_has_larch() {
     for _pp in /sys/block/"$1"/"$1"*/partition; do
         [ -f "$_pp" ] || continue
         _pn=$(basename "$(dirname "$_pp")")
-        if part_is_larchos "/dev/$_pn"; then echo "/dev/$_pn"; return 0; fi
-    done
-    return 1
-}
-
-# Echo the /dev path of the LARCHCONF partition on a disk (sysfs name), or
-# nothing. Reads the ext4 superblock volume label (offset 1024 + 120, 16 bytes).
-find_larchconf_part() {
-    for _pp in /sys/block/"$1"/"$1"*/partition; do
-        [ -f "$_pp" ] || continue
-        _pn=$(basename "$(dirname "$_pp")")
-        _lbl=$(dd if="/dev/$_pn" bs=1 skip=1144 count=16 2>/dev/null | tr -d '\000')
-        if [ "$_lbl" = "LARCHCONF" ]; then echo "/dev/$_pn"; return 0; fi
+        part_is_larchefi "/dev/$_pn" && return 0
     done
     return 1
 }
 
 # dialog --menu of installable disks; selection (a /dev path) lands in TARGET_DISK.
 # Disks that already carry a larch-os install are marked and listed first, with the
-# first such disk pre-selected so updating an existing install is the happy path.
+# first such disk pre-selected. There is no in-place update on this layout: the
+# chosen disk is always erased.
 # ESC re-shows the dialog. Restart button calls do_reboot.
 pick_disk_dialog() {
     while true; do
@@ -65,7 +54,7 @@ pick_disk_dialog() {
                     loop*|sr*|ram*|fd*|dm-*|md*) continue ;;
                 esac
                 [ -b "/dev/$_name" ] || continue
-                if find_larchos_part "$_name" >/dev/null; then _is_larch=1; else _is_larch=0; fi
+                if disk_has_larch "$_name"; then _is_larch=1; else _is_larch=0; fi
                 [ "$_is_larch" -eq "$_want_larch" ] || continue
                 _sectors=$(cat "$_sys/size" 2>/dev/null || echo 0)
                 _size=$(human_size $(( _sectors * 512 )))
@@ -85,7 +74,7 @@ pick_disk_dialog() {
         dialog --no-cancel --extra-button --extra-label "Restart" \
             --default-item "$_default" \
             --backtitle "$DIALOG_BT" --title " Target Disk " \
-            --menu "Select the target disk. Disks marked [Larch OS] already have larch-os installed and can be updated in place.\nClean installs ERASE the selected disk." \
+            --menu "Select the target disk. Disks marked [Larch OS] already have larch-os installed.\nThe selected disk will be ERASED." \
             18 72 8 "$@" 2>"$DIALOG_TMP"
         _rc=$?
         if [ "$_rc" -eq 0 ]; then

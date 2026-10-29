@@ -6,6 +6,50 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **larch-os** is a build system that produces a single `larch-os.iso` — a minimal, immutable ("atomic") Linux distribution running GNOME Wayland on Debian Trixie. The OS root is a read-only SquashFS image; writes at runtime go to a tmpfs OverlayFS layer and are discarded on reboot. Applications are delivered exclusively via Flatpak. There is no running package manager.
 
+## Branch `no-initramfs` (experiment)
+
+This branch replaces the squashfs-file + initramfs + tmpfs-overlay boot with a
+**read-only root partition mounted directly by the kernel**. Where this section
+contradicts the rest of the file, this section wins.
+
+- **Kernel:** built in the separate **larch-kernel** repo (`../larch-kernel`,
+  GitHub `kuhwar/larch-kernel`) by a manual "Build kernel" workflow: Debian's
+  `linux-source-6.12` with Debian's amd64 config, switching only `EXT4_FS`,
+  `BLK_DEV_NVME`, `ATA`, `SATA_AHCI`, `SCSI`, `BLK_DEV_SD`, `VIRTIO_BLK`,
+  `SCSI_VIRTIO` to built-in (plus `DEBUG_INFO_NONE`, empty `SYSTEM_TRUSTED_KEYS`),
+  published as a release (`linux-image`/`linux-headers` `.deb`s, tag
+  `<debian-version>.larch<CFG_REV>`). Stage 4 runs `scripts/fetch-kernel.sh`,
+  which downloads the latest release into `kernel-cache/` (bind-mounted, survives
+  `--clean`; `LARCH_KERNEL_TAG` pins one, `LARCH_KERNEL_REPO` changes the repo; a
+  `.tag` of `local` uses hand-placed `.deb`s). `setup-chroot.sh` installs them
+  before `packages.list`, so DKMS (nvidia, broadcom-sta) builds against their
+  headers. `linux-image-amd64` / `linux-headers-amd64` are no longer in
+  `packages.list`. USB storage is still a module, so the installed system can't
+  boot from a USB disk.
+- **No OS initramfs:** `initramfs/os/` is gone and stage 7 is a no-op (numbering
+  kept). `initramfs/installer/` still boots the ISO.
+- **Disk layout (four partitions):**
+  1. `LARCHEFI` — FAT32, 512 MiB: `EFI/BOOT/BOOTX64.EFI`, `loader/`, `larch-os/vmlinuz`
+  2. `LARCHSYS` — ext4, 8 GiB: the OS, unpacked from `rootfs.squashfs` by the
+     installer (`unsquashfs`, now in the installer initramfs). Mounted
+     `root=PARTLABEL=LARCHSYS rootfstype=ext4 ro rootwait`. The installer writes
+     hostname, hosts, machine-id, passwd/shadow, group/gshadow/subuid/subgid
+     straight into its `/etc` (`apply_machine_config` in `installer/lib/helpers.sh`).
+  3. `LARCHCONF` — ext4, 1 GiB, `/etc/larch-conf`: `var/` (a copy of the image's
+     `/var`, bind-mounted over `/var`), `nm-system-connections/`, `cups/`, `accounts/`
+  4. `LARCHHOME` — ext4, remainder, `/home`
+- **fstab:** `/` ro, LARCHCONF (not `nofail`), `/var` bind from LARCHCONF,
+  `/var/tmp` and `/media` tmpfs, plus the two `/etc` binds. The per-`/var` binds
+  and their `larchconf-seed/` dirs are gone (all of `/var` persists). Mount points
+  must exist in the image (`setup-chroot.sh` creates them) since nothing can be
+  created on `/` at boot. `/etc/resolv.conf` is a symlink to
+  `/run/NetworkManager/resolv.conf` (set at the end of stage 4).
+- **No in-place update:** `installer/lib/update.sh` is gone; every install wipes the disk.
+- **Known gaps (read-only `/etc`):** password changes (`passwd`, GNOME Settings)
+  fail, since they rename a new `/etc/shadow` into place; automatic timezone
+  can't replace `/etc/localtime` (stays UTC); anything else that writes `/etc`
+  at runtime gets `EROFS`.
+
 ## Project goal & design principles
 
 The end product is an **atomic, image-based distro** where the entire OS is one immutable unit and upgrades happen by swapping that unit — never by mutating files in place.
