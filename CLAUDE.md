@@ -34,7 +34,7 @@ file, this section wins.
   kept). `initramfs/installer/` still boots the ISO.
 - **Disk layout (four partitions):**
   1. `LARCHEFI` — FAT32, 512 MiB: `EFI/BOOT/BOOTX64.EFI`, `loader/`, `larch-os/vmlinuz`
-  2. `LARCHSYS` — 8 GiB, `rootfs.squashfs` `dd`'d onto the partition (no
+  2. `LARCHSYS` — 1 GiB, `rootfs.squashfs` `dd`'d onto the partition (no
      filesystem label — matched by PARTLABEL). Mounted
      `root=PARTLABEL=LARCHSYS rootfstype=squashfs ro rootwait`.
   3. `LARCHCONF` — ext4, 1 GiB, mounted at `/larch-conf` (outside `/etc`, which

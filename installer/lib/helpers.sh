@@ -3,7 +3,7 @@
 
 ISO_MOUNT="/mnt/iso"
 EFI_PART_SIZE="512MiB"
-SYS_PART_SIZE="8GiB"
+SYS_PART_SIZE="1GiB"
 # LARCHCONF holds all of /var (journal capped at 64M, Flatpak system installs
 # excluded — those go to --user in /home), so it is larger than on master.
 CONF_PART_SIZE="1GiB"
