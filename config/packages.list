@@ -173,8 +173,6 @@ fonts-liberation
 dosfstools
 e2fsprogs
 systemd-boot
-# unsquashfs: the installer unpacks rootfs.squashfs onto the LARCHSYS partition.
-squashfs-tools
 # dialog drives the installer's full-screen configuration form (ncurses). Copied
 # into the installer initramfs in stage 8; the installer falls back to plain text
 # prompts if it (or a terminfo entry) is absent.

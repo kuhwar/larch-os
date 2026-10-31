@@ -30,83 +30,52 @@ die() {
 info() { echo "  >> $*"; }
 nl()   { echo ""; }
 
-# Install the account files into accounts/ on a mounted LARCHCONF.
-# Usage: seed_accounts <larchconf-mount> <passwd-file> <shadow-file>
-seed_accounts() {
-    mkdir -p "$1/accounts"
-    chown 0:0 "$1/accounts"
-    chmod 0700 "$1/accounts"
-    cp "$2" "$1/accounts/passwd"
-    cp "$3" "$1/accounts/shadow"
-    chown 0:0 "$1/accounts/passwd" "$1/accounts/shadow"
-    chmod 0644 "$1/accounts/passwd"
-    chmod 0600 "$1/accounts/shadow"
-}
-
-# Write this machine's config into the unpacked OS (a mounted LARCHSYS), which
-# is read-only at runtime: hostname, hosts, machine-id, and the user account in
-# place of the image's UID-1000 placeholder "larch". `cat >` rewrites each file
-# in place, so it keeps the image's owner and mode (e.g. shadow: root:shadow 0640).
-# Usage: apply_machine_config <root> <config-dir> <username>
+# Write this machine's identity files into <out-dir> (LARCHCONF's etc/, the
+# upper layer of the /etc overlay): hostname, hosts, machine-id, and the account
+# databases with the user in place of the image's UID-1000 placeholder "larch".
+# Each starts as a cp -p of the image's file (read from the mounted LARCHSYS) and
+# is rewritten with `cat >`, so it keeps the image's owner and mode (e.g. shadow:
+# root:shadow 0640) — the same result as an overlay copy-up.
+# Usage: apply_machine_config <image-root> <config-dir> <username> <out-dir>
 apply_machine_config() {
-    _root="$1"; _cfg="$2"; _user="$3"
+    _root="$1"; _cfg="$2"; _user="$3"; _out="$4"
 
-    cat "$_cfg/hostname"   > "$_root/etc/hostname"
-    cat "$_cfg/hosts"      > "$_root/etc/hosts"
-    cat "$_cfg/machine-id" > "$_root/etc/machine-id"
-    chmod 0444 "$_root/etc/machine-id"
+    mkdir -p "$_out"
+    chown 0:0 "$_out"
+    chmod 0755 "$_out"
+    for _f in hostname hosts machine-id passwd shadow group gshadow subuid subgid; do
+        cp -p "$_root/etc/$_f" "$_out/$_f"
+    done
+
+    cat "$_cfg/hostname"   > "$_out/hostname"
+    cat "$_cfg/hosts"      > "$_out/hosts"
+    cat "$_cfg/machine-id" > "$_out/machine-id"
 
     # passwd: drop any UID-1000 line, append the installed user.
     grep -v '^[^:]*:[^:]*:1000:' "$_root/etc/passwd" > "$_cfg/passwd.new" || true
     cat "$_cfg/passwd" >> "$_cfg/passwd.new"
-    cat "$_cfg/passwd.new" > "$_root/etc/passwd"
+    cat "$_cfg/passwd.new" > "$_out/passwd"
     # shadow: drop the placeholder's entry, append the hashed installer entry.
     grep -v "^larch:\|^${_user}:" "$_root/etc/shadow" > "$_cfg/shadow.new" || true
     cat "$_cfg/shadow" >> "$_cfg/shadow.new"
-    cat "$_cfg/shadow.new" > "$_root/etc/shadow"
+    cat "$_cfg/shadow.new" > "$_out/shadow"
     rm -f "$_cfg/passwd.new" "$_cfg/shadow.new"
 
     if [ "$_user" != "larch" ]; then
         # Group memberships (word-boundary-safe) and the subordinate ID range
         # for rootless containers move to the installed username.
         for _f in group gshadow; do
-            [ -f "$_root/etc/$_f" ] || continue
             sed "s/\blarch\b/$_user/g" "$_root/etc/$_f" > "$_cfg/$_f.new"
-            cat "$_cfg/$_f.new" > "$_root/etc/$_f"
+            cat "$_cfg/$_f.new" > "$_out/$_f"
             rm -f "$_cfg/$_f.new"
         done
         for _f in subuid subgid; do
-            [ -f "$_root/etc/$_f" ] || continue
             sed "s/^larch:/$_user:/" "$_root/etc/$_f" > "$_cfg/$_f.new"
-            cat "$_cfg/$_f.new" > "$_root/etc/$_f"
+            cat "$_cfg/$_f.new" > "$_out/$_f"
             rm -f "$_cfg/$_f.new"
         done
-        # The build-time placeholder's home; /home is LARCHHOME at runtime anyway.
-        rm -rf "$_root/home/larch"
     fi
-    unset _root _cfg _user _f
-}
-
-# Copy each top-level directory of the ISO's larchconf-seed/ onto a mounted
-# LARCHCONF, skipping any that already exist there (never clobbers live state).
-# ISO9660 drops modes, so they're set here: root-owned, directories get the mode
-# in a sibling <name>.mode file (default 0700), files the same minus execute.
-# Usage: seed_larchconf <larchconf-mount>
-seed_larchconf() {
-    for _src in "$ISO_MOUNT/larchconf-seed"/*/; do
-        [ -d "$_src" ] || continue
-        _name=$(basename "$_src")
-        [ -e "$1/$_name" ] && continue
-        _mode=0700
-        if [ -f "$ISO_MOUNT/larchconf-seed/$_name.mode" ]; then
-            _mode=$(cat "$ISO_MOUNT/larchconf-seed/$_name.mode")
-        fi
-        cp -R "${_src%/}" "$1/"
-        chown -R 0:0 "$1/$_name"
-        find "$1/$_name" -type d -exec chmod "$_mode" {} \;
-        find "$1/$_name" -type f -exec chmod "$_mode" {} \; -exec chmod a-x {} \;
-    done
-    unset _src _name _mode
+    unset _root _cfg _user _out _f
 }
 
 # Wipe the screen (used to clear dialog's drawing before/after plain output).

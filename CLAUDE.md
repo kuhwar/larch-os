@@ -9,14 +9,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Branch `no-initramfs` (experiment)
 
 This branch replaces the squashfs-file + initramfs + tmpfs-overlay boot with a
-**read-only root partition mounted directly by the kernel**. Where this section
-contradicts the rest of the file, this section wins.
+**squashfs root partition mounted directly by the kernel**: `rootfs.squashfs`
+is written raw onto LARCHSYS (a kernel can't loop-mount a file without an
+initramfs), so the root is identical on every install. `/etc` is an overlay
+whose upper layer is on LARCHCONF, so it's writable and persistent; the rest of
+the root is truly read-only. Where this section contradicts the rest of the
+file, this section wins.
 
 - **Kernel:** built in the separate **larch-kernel** repo (`../larch-kernel`,
   GitHub `kuhwar/larch-kernel`) by a manual "Build kernel" workflow: Debian's
-  `linux-source-6.12` with Debian's amd64 config, switching only `EXT4_FS`,
-  `BLK_DEV_NVME`, `ATA`, `SATA_AHCI`, `SCSI`, `BLK_DEV_SD`, `VIRTIO_BLK`,
-  `SCSI_VIRTIO` to built-in (plus `DEBUG_INFO_NONE`, empty `SYSTEM_TRUSTED_KEYS`),
+  `linux-source-6.12` with Debian's amd64 config, switching only `SQUASHFS`,
+  `SQUASHFS_ZSTD`, `EXT4_FS`, `BLK_DEV_NVME`, `ATA`, `SATA_AHCI`, `SCSI`,
+  `BLK_DEV_SD`, `VIRTIO_BLK`, `SCSI_VIRTIO`, and USB storage (`USB`,
+  `USB_STORAGE`, `USB_UAS`, xHCI/EHCI/OHCI/UHCI host controllers) to built-in (plus `DEBUG_INFO_NONE`, empty `SYSTEM_TRUSTED_KEYS`),
   published as a release (`linux-image`/`linux-headers` `.deb`s, tag
   `<debian-version>.larch<CFG_REV>`). Stage 4 runs `scripts/fetch-kernel.sh`,
   which downloads the latest release into `kernel-cache/` (bind-mounted, survives
@@ -24,31 +29,45 @@ contradicts the rest of the file, this section wins.
   `.tag` of `local` uses hand-placed `.deb`s). `setup-chroot.sh` installs them
   before `packages.list`, so DKMS (nvidia, broadcom-sta) builds against their
   headers. `linux-image-amd64` / `linux-headers-amd64` are no longer in
-  `packages.list`. USB storage is still a module, so the installed system can't
-  boot from a USB disk.
+  `packages.list`.
 - **No OS initramfs:** `initramfs/os/` is gone and stage 7 is a no-op (numbering
   kept). `initramfs/installer/` still boots the ISO.
 - **Disk layout (four partitions):**
   1. `LARCHEFI` — FAT32, 512 MiB: `EFI/BOOT/BOOTX64.EFI`, `loader/`, `larch-os/vmlinuz`
-  2. `LARCHSYS` — ext4, 8 GiB: the OS, unpacked from `rootfs.squashfs` by the
-     installer (`unsquashfs`, now in the installer initramfs). Mounted
-     `root=PARTLABEL=LARCHSYS rootfstype=ext4 ro rootwait`. The installer writes
-     hostname, hosts, machine-id, passwd/shadow, group/gshadow/subuid/subgid
-     straight into its `/etc` (`apply_machine_config` in `installer/lib/helpers.sh`).
-  3. `LARCHCONF` — ext4, 1 GiB, `/etc/larch-conf`: `var/` (a copy of the image's
-     `/var`, bind-mounted over `/var`), `nm-system-connections/`, `cups/`, `accounts/`
+  2. `LARCHSYS` — 8 GiB, `rootfs.squashfs` `dd`'d onto the partition (no
+     filesystem label — matched by PARTLABEL). Mounted
+     `root=PARTLABEL=LARCHSYS rootfstype=squashfs ro rootwait`.
+  3. `LARCHCONF` — ext4, 1 GiB, mounted at `/larch-conf` (outside `/etc`, which
+     the overlay would hide it under): `etc/` + `etc-work/` (the `/etc` overlay's
+     upper and work dirs; the installer seeds `etc/` with this machine's
+     hostname, hosts, machine-id, passwd/shadow, group/gshadow, subuid/subgid —
+     `apply_machine_config` in `installer/lib/helpers.sh`, built from the image's
+     files), `var/` (a copy of the image's `/var`, bind-mounted over `/var`)
   4. `LARCHHOME` — ext4, remainder, `/home`
-- **fstab:** `/` ro, LARCHCONF (not `nofail`), `/var` bind from LARCHCONF,
-  `/var/tmp` and `/media` tmpfs, plus the two `/etc` binds. The per-`/var` binds
-  and their `larchconf-seed/` dirs are gone (all of `/var` persists). Mount points
-  must exist in the image (`setup-chroot.sh` creates them) since nothing can be
-  created on `/` at boot. `/etc/resolv.conf` is a symlink to
-  `/run/NetworkManager/resolv.conf` (set at the end of stage 4).
+- **`/etc` overlay:** `lowerdir=/etc` (the image's), `upperdir=/larch-conf/etc`,
+  mounted from fstab. Rename-based writers (`passwd`, `usermod`, timedated,
+  NetworkManager, CUPS, …) just work and persist, so the per-path binds, the
+  `RequiresMountsFor` drop-ins, the CUPS `larch-state` redirect,
+  `larch-persist-accounts`/`-timezone` and `larchconf-seed/` are all gone. `/etc`
+  and `/var` aren't `nofail`, so they're up before `local-fs.target`, i.e.
+  before every normal service.
+- **Before the overlay mounts**, PID 1 sees only the image's `/etc`: it loads
+  units and fstab from there, and reads machine-id and hostname before any
+  mount. So the image ships an empty `/etc/machine-id` (and
+  `/var/lib/dbus/machine-id` → it; set in stage 6), and the installer appends
+  `systemd.machine_id=<id> systemd.hostname=<host>` to the loader entries on
+  LARCHEFI, matching the upper layer's copies.
+- **fstab:** `/` squashfs ro (PARTLABEL), LARCHCONF at `/larch-conf` (not
+  `nofail`), the `/etc` overlay, `/var` bind from LARCHCONF, `/var/tmp` and
+  `/media` tmpfs, `/home`. Mount points must exist in the image (`setup-chroot.sh`
+  creates them) since nothing can be created on `/` at boot. `/etc/resolv.conf`
+  is a symlink to `/run/NetworkManager/resolv.conf` (set at the end of stage 4).
 - **No in-place update:** `installer/lib/update.sh` is gone; every install wipes the disk.
-- **Known gaps (read-only `/etc`):** password changes (`passwd`, GNOME Settings)
-  fail, since they rename a new `/etc/shadow` into place; automatic timezone
-  can't replace `/etc/localtime` (stays UTC); anything else that writes `/etc`
-  at runtime gets `EROFS`.
+- **Known gaps:** a unit enabled at runtime (in the upper `/etc/systemd`) is
+  invisible to PID 1 at boot, since it loads units before the overlay mounts;
+  any `/etc` file changed at runtime hides a newer image's version (drift) —
+  an update mechanism would have to reconcile the upper layer; writes outside
+  `/etc`, `/var`, `/home` and the tmpfs mounts get `EROFS`.
 
 ## Project goal & design principles
 
@@ -125,6 +144,7 @@ sudo make install-deps
 | `config/packages.list` or `scripts/setup-chroot.sh` | `./docker-build.sh --stage 4` |
 | `scripts/clean-rootfs.sh` or `config/remove.list` | `./docker-build.sh --stage 5` |
 | `rootfs-overlay/` or any rootfs content | `./docker-build.sh --stage 6` (squashfs rebuild) |
+| `config/squashfs.exclude` | `./docker-build.sh --stage 6` |
 | `initramfs/os/` (init or modules.list) | `./docker-build.sh --stage 7` |
 | `installer/install.sh` or `initramfs/installer/` | `./docker-build.sh --stage 8` |
 | Bootloader configs only | `./docker-build.sh --stage 9` (assemble-iso only) |
@@ -147,7 +167,7 @@ Ten stages executed in order; `--stage N` skips stages before N, `--only N` runs
 3. **copy-overlay** — `cp -a rootfs-overlay/. work/rootfs/` (overlay wins over debootstrap defaults)
 4. **chroot-configure** — bind-mounts proc/sys/dev, then runs `scripts/setup-chroot.sh` inside chroot
 5. **clean-rootfs** — runs `scripts/clean-rootfs.sh` inside chroot to physically remove apt/dpkg and dev headers; last, it runs `systemd-update-done` so the image ships `/etc/.updated`/`/var/.updated` (otherwise `ConditionNeedsUpdate=` services — ldconfig, systemd-sysusers — rerun every boot, since `/etc` resets each boot)
-6. **make-squashfs** — `mksquashfs work/rootfs work/rootfs.squashfs -comp zstd -Xcompression-level 19`
+6. **make-squashfs** — `mksquashfs work/rootfs work/rootfs.squashfs -comp zstd -Xcompression-level 19 -wildcards -ef config/squashfs.exclude` (the exclude file drops build leftovers in `/dev`, `/run`, `/tmp`, `/home/larch` and `/boot`, keeping the mount points)
 7. **build-os-initramfs** — builds the tiny OS initramfs (`work/os-initramfs.img`): busybox + modules + init, **no squashfs**. Squashfs lives separately on the LARCHOS partition and is loop-mounted at boot.
 8. **build-installer** — builds the installer initramfs (`work/installer-initramfs.img`): busybox + modules + `install.sh` + `reserved-names` (user/group names from the rootfs, minus `larch`) + tool binaries (sfdisk, wipefs, mkfs.fat, mkfs.ext4, openssl, blockdev, plus `dialog` + terminfo for the installer UI — required, the build fails if they are absent from the rootfs). GRUB boots this to run the installer.
 9. **assemble-iso** — builds `work/iso/` directory tree (see ISO layout below)

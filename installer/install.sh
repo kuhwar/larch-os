@@ -4,7 +4,7 @@
 # Runs as PID 1's child in the installer initramfs (see initramfs/installer/init).
 # The init mounts the installer USB at /mnt/iso before calling this script, so all
 # OS files to be installed are available there:
-#   /mnt/iso/larch-os/rootfs.squashfs  — OS root filesystem (unpacked onto LARCHSYS)
+#   /mnt/iso/larch-os/rootfs.squashfs  — OS root filesystem (written raw onto LARCHSYS)
 #   /mnt/iso/larch-os/vmlinuz          — kernel (root-mount drivers built in)
 #   /mnt/iso/EFI/BOOT/BOOTX64.EFI     — systemd-boot
 #   /mnt/iso/loader/                   — bootloader config
@@ -14,14 +14,15 @@
 # it and creates four partitions:
 #
 #   1. LARCHEFI  (FAT32) — systemd-boot, loader config, vmlinuz. No initramfs:
-#                          the kernel mounts LARCHSYS itself.
-#   2. LARCHSYS  (ext4)  — the OS, unpacked from rootfs.squashfs, with this
-#                          machine's config written straight into its /etc
-#                          (hostname, hosts, machine-id, user account). Mounted
-#                          read-only at boot.
-#   3. LARCHCONF (ext4)  — /etc/larch-conf: a copy of the image's /var
-#                          (bind-mounted over /var), the /etc stores from the
-#                          ISO's larchconf-seed/, and accounts/passwd·shadow.
+#                          the kernel mounts LARCHSYS itself. The loader entries
+#                          carry this machine's id and hostname
+#                          (systemd.machine_id=, systemd.hostname=).
+#   2. LARCHSYS  (squashfs) — rootfs.squashfs written byte-for-byte onto the
+#                          partition; identical on every install.
+#   3. LARCHCONF (ext4)  — /larch-conf: etc/ + etc-work/, the upper layer of the
+#                          overlay on /etc, starting with this machine's
+#                          hostname, hosts, machine-id and account files; and a
+#                          copy of the image's /var (bind-mounted over /var).
 #   4. LARCHHOME (ext4)  — /home/<username>, seeded from /etc/skel.
 #
 # There is no in-place update on this layout yet: every run is a clean install.
@@ -52,7 +53,6 @@ done
 [ -f "$ISO_MOUNT/larch-os/vmlinuz" ]         || die "Kernel not found on installer medium"
 [ -f "$ISO_MOUNT/EFI/BOOT/BOOTX64.EFI" ]    || die "EFI binary not found on installer medium"
 [ -d "$ISO_MOUNT/loader" ]                   || die "Bootloader config not found on installer medium"
-command -v unsquashfs >/dev/null 2>&1        || die "unsquashfs not found in installer initramfs"
 
 # ── Main install loop ─────────────────────────────────────────────────────────
 
@@ -83,7 +83,7 @@ if [ "$AUTO_YES" -ne 1 ]; then
   Hostname         : $LARCH_HOSTNAME
   Target disk      : $TARGET_DISK
   EFI partition    : $PART1  (FAT32, $EFI_PART_SIZE, LARCHEFI)
-  System partition : $PART2  (ext4, $SYS_PART_SIZE, LARCHSYS)
+  System partition : $PART2  (squashfs, $SYS_PART_SIZE, LARCHSYS)
   Config partition : $PART3  (ext4, $CONF_PART_SIZE, LARCHCONF)
   Home partition   : $PART4  (ext4, remainder, LARCHHOME)
 
@@ -126,10 +126,12 @@ printf '%s:%s:%d:0:99999:7:::\n' "$LARCH_USERNAME" "$pw_hash" "$today_days" \
 chmod 600 "$CONFIG_TMP/shadow"
 
 # machine-id — generated once at install so the machine keeps a stable identity
-# (DHCP lease/IP, DHCPv6 DUID, systemd journal). Written into LARCHSYS's /etc,
-# which is read-only at runtime, so it never changes after install.
-# Format: 32 lowercase hex digits + newline (sourced from the kernel UUID pool).
-tr -d '-' < /proc/sys/kernel/random/uuid > "$CONFIG_TMP/machine-id"
+# (DHCP lease/IP, DHCPv6 DUID, systemd journal). Written to /etc's upper layer,
+# and passed as systemd.machine_id= in the loader entries, since PID 1 reads it
+# before the /etc overlay mounts (the image's /etc/machine-id is empty).
+# Format: 32 lowercase hex digits (sourced from the kernel UUID pool).
+MACHINE_ID=$(tr -d '-' < /proc/sys/kernel/random/uuid)
+printf '%s\n' "$MACHINE_ID" > "$CONFIG_TMP/machine-id"
 
 # ── Partition ─────────────────────────────────────────────────────────────────
 
@@ -156,23 +158,23 @@ for _p in "$PART1" "$PART2" "$PART3" "$PART4"; do
 done
 unset _p
 
-# ── LARCHSYS: unpack the OS and write this machine's config ──────────────────
+# ── LARCHSYS: write the OS image ─────────────────────────────────────────────
 
-show_step "Formatting system partition as ext4 ($PART2)"
-mkfs.ext4 -F -L LARCHSYS "$PART2" >/dev/null 2>&1
+_img="$ISO_MOUNT/larch-os/rootfs.squashfs"
+[ "$(stat -c %s "$_img")" -le "$(blockdev --getsize64 "$PART2")" ] \
+    || die "rootfs.squashfs is larger than the system partition ($SYS_PART_SIZE)"
 
+show_step "Writing the OS image to the system partition ($PART2)"
+dd if="$_img" of="$PART2" bs=4M conv=fsync 2>/dev/null \
+    || die "Failed to write rootfs.squashfs to $PART2"
+unset _img
+
+# Mounted only to read the image's /etc (the identity files start from it) and
+# /var (copied to LARCHCONF below).
 mkdir -p "$MOUNT_SYS"
-mount_or_die ext4 "$PART2" "$MOUNT_SYS"
+mount_or_die squashfs "$PART2" "$MOUNT_SYS"
 
-show_step "Unpacking the OS (this takes a few minutes)"
-# unsquashfs keeps owners, modes, setuid bits and xattrs (file capabilities).
-unsquashfs -f -no-progress -d "$MOUNT_SYS" "$ISO_MOUNT/larch-os/rootfs.squashfs" >/dev/null \
-    || die "Failed to unpack rootfs.squashfs onto $PART2"
-
-show_step "Writing machine config into the system partition"
-apply_machine_config "$MOUNT_SYS" "$CONFIG_TMP" "$LARCH_USERNAME"
-
-# ── LARCHCONF: /var and the /etc stores ──────────────────────────────────────
+# ── LARCHCONF: /etc's upper layer and /var ───────────────────────────────────
 
 mkdir -p "$MOUNT_CONF"
 
@@ -184,11 +186,10 @@ mount_or_die ext4 "$PART3" "$MOUNT_CONF"
 show_step "Seeding config partition"
 # /var is bind-mounted from here over the read-only root's /var.
 cp -a "$MOUNT_SYS/var" "$MOUNT_CONF/var"
-# Account files: a copy for larch-persist-accounts; the system reads the ones
-# written into LARCHSYS's /etc above.
-seed_accounts "$MOUNT_CONF" "$CONFIG_TMP/passwd" "$CONFIG_TMP/shadow"
-# Bind-mount sources for /etc paths in /etc/fstab (NM connections, CUPS).
-seed_larchconf "$MOUNT_CONF"
+show_step "Writing machine config into the config partition"
+apply_machine_config "$MOUNT_SYS" "$CONFIG_TMP" "$LARCH_USERNAME" "$MOUNT_CONF/etc"
+# overlayfs's workdir: empty, on the same filesystem as the upper layer.
+mkdir -m 0700 "$MOUNT_CONF/etc-work"
 
 sync
 umount "$MOUNT_CONF"
@@ -206,6 +207,10 @@ show_step "Installing bootloader and kernel"
 mkdir -p "$MOUNT_EFI/EFI/BOOT" "$MOUNT_EFI/larch-os"
 cp "$ISO_MOUNT/EFI/BOOT/BOOTX64.EFI" "$MOUNT_EFI/EFI/BOOT/BOOTX64.EFI"
 cp -r "$ISO_MOUNT/loader" "$MOUNT_EFI/"
+# This machine's id and hostname, which systemd needs before /etc/fstab mounts
+# LARCHCONF (see the machine-id comment above).
+sed -i "s/^options .*/& systemd.machine_id=$MACHINE_ID systemd.hostname=$LARCH_HOSTNAME/" \
+    "$MOUNT_EFI"/loader/entries/*.conf
 cp "$ISO_MOUNT/larch-os/vmlinuz" "$MOUNT_EFI/larch-os/vmlinuz"
 
 sync

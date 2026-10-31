@@ -12,7 +12,8 @@
 #
 # The cache dir survives --clean; a release already in it is not downloaded
 # again. To use a locally built kernel instead, put its .debs in the cache dir
-# and write "local" into <cache-dir>/.tag — it is then used as is.
+# and write "local" into <cache-dir>/.tag — it is then used as is. Without a
+# linux-headers .deb, DKMS (nvidia, broadcom-sta) skips building its modules.
 
 set -euo pipefail
 
@@ -23,8 +24,9 @@ CACHE="${1:?usage: fetch-kernel.sh <cache-dir>}"
 REPO="${LARCH_KERNEL_REPO:-kuhwar/larch-kernel}"
 mkdir -p "$CACHE"
 
+# A local kernel may come without headers (then DKMS modules are skipped).
 have_debs() {
-    ls "$CACHE"/linux-image-*.deb "$CACHE"/linux-headers-*.deb >/dev/null 2>&1
+    ls "$CACHE"/linux-image-*.deb >/dev/null 2>&1
 }
 cached_tag=$(cat "$CACHE/.tag" 2>/dev/null || true)
 

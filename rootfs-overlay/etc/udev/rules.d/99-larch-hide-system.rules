@@ -1,11 +1,12 @@
-# Keep the larch-os EFI and system partitions (labels LARCHEFI, LARCHSYS) out
-# of the desktop.
+# Keep the larch-os EFI and system partitions (LARCHEFI, LARCHSYS) out of the
+# desktop. LARCHSYS is a raw squashfs, which has no filesystem label, so it is
+# matched by its GPT partition name.
 #
 # UDISKS_IGNORE=1 makes udisks2 (and therefore GNOME Files / the Shell mount
 # UI) ignore the device entirely: it is not listed and cannot be mounted from
 # the session. The firmware reads LARCHEFI and the kernel mounts LARCHSYS
 # before udev and udisks exist, so this does not affect booting. It only stops
-# the logged-in user from browsing or mounting the boot files or a second,
-# writable view of the OS.
+# the logged-in user from browsing or mounting the boot files or a second view
+# of the OS.
 SUBSYSTEM=="block", ENV{ID_FS_LABEL}=="LARCHEFI", ENV{UDISKS_IGNORE}="1"
-SUBSYSTEM=="block", ENV{ID_FS_LABEL}=="LARCHSYS", ENV{UDISKS_IGNORE}="1"
+SUBSYSTEM=="block", ENV{ID_PART_ENTRY_NAME}=="LARCHSYS", ENV{UDISKS_IGNORE}="1"

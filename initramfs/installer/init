@@ -25,6 +25,8 @@ log "larch-os installer initramfs starting"
 # ── Load modules ──────────────────────────────────────────────────────────────
 
 load_mod isofs
+# squashfs: install.sh mounts the freshly written LARCHSYS to read the image's /etc and /var
+load_mod squashfs
 load_mod loop
 load_mod fat
 load_mod vfat

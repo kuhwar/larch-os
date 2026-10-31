@@ -15,7 +15,7 @@
 #   4.  chroot-configure    — fetch the kernel (scripts/fetch-kernel.sh), then
 #                             run scripts/setup-chroot.sh inside chroot
 #   5.  clean-rootfs        — strip package manager (scripts/clean-rootfs.sh)
-#   6.  make-squashfs       — compress rootfs into rootfs.squashfs (the installer unpacks it)
+#   6.  make-squashfs       — compress rootfs into rootfs.squashfs (the installer writes it raw onto LARCHSYS)
 #   7.  (skipped)           — no OS initramfs: the kernel mounts LARCHSYS itself
 #   8.  build-installer     — build the installer initramfs (mounts ISO, runs install.sh)
 #   9.  assemble-iso        — copy all pieces into work/iso/
@@ -254,9 +254,9 @@ build_installer_initramfs() {
     # Copy tool binaries from larch OS rootfs with their shared libraries.
     # These tools are not in busybox: sfdisk (partitioning), wipefs (disk wipe),
     # mkfs.fat (FAT32 format), mkfs.ext4 (ext4 format), openssl (password hash),
-    # blockdev (re-read partition table), unsquashfs (unpack the OS onto LARCHSYS).
+    # blockdev (re-read partition table, partition size).
     info "[installer] Copying tool binaries from larch OS rootfs"
-    for bin in sfdisk wipefs mkfs.fat mkfs.ext4 openssl blockdev unsquashfs; do
+    for bin in sfdisk wipefs mkfs.fat mkfs.ext4 openssl blockdev; do
         copy_bin_with_libs "$bin" "$build_dir"
     done
 
@@ -390,6 +390,10 @@ run_stage 3 "copy-overlay — merge rootfs-overlay into rootfs" && {
     if [ -d "$SCRIPT_DIR/rootfs-overlay" ]; then
         info "Copying overlay files"
         cp -a "$SCRIPT_DIR/rootfs-overlay/." "$ROOTFS_DIR/"
+        # cp -a carries the checkout's modes, which a umask of 002 leaves
+        # group-writable — on /, /etc, /usr too. Nothing here wants g/o write.
+        (cd "$SCRIPT_DIR/rootfs-overlay" && find . ! -type l -print0) \
+            | (cd "$ROOTFS_DIR" && xargs -0 chmod go-w)
     else
         info "No rootfs-overlay directory found, skipping"
     fi
@@ -446,16 +450,23 @@ run_stage 5 "clean-rootfs — strip package manager and build artifacts" && {
 
 # ── Stage 6: make-squashfs ────────────────────────────────────────────────────
 run_stage 6 "make-squashfs — compress rootfs into squashfs image" && {
+    # The image is the root filesystem of every install as-is, so it must carry
+    # no machine identity: an empty /etc/machine-id makes systemd take the id
+    # from systemd.machine_id= (the installer puts it in the loader entry) and
+    # mount it over the read-only file; D-Bus's copy follows it.
+    : > "$ROOTFS_DIR/etc/machine-id"
+    ln -sfn /etc/machine-id "$ROOTFS_DIR/var/lib/dbus/machine-id"
+
     info "Creating squashfs (zstd compression)"
     rm -f "$SQUASHFS_FILE"
+    # config/squashfs.exclude: build leftovers and /boot (see the file).
     mksquashfs "$ROOTFS_DIR" "$SQUASHFS_FILE" \
         -comp zstd \
         -Xcompression-level 19 \
         -no-progress \
         -noappend \
-        -e "$ROOTFS_DIR/proc/*" \
-        -e "$ROOTFS_DIR/sys/*"  \
-        -e "$ROOTFS_DIR/dev/*"
+        -wildcards \
+        -ef "$SCRIPT_DIR/config/squashfs.exclude"
     sz=$(du -sh "$SQUASHFS_FILE" | cut -f1)
     info "Squashfs created: $SQUASHFS_FILE ($sz)"
 }
@@ -500,7 +511,7 @@ run_stage 9 "assemble-iso — copy all files into ISO tree" && {
         die "Installer initramfs not found — run stage 8 first"
     cp "$INSTALLER_INITRAMFS_FILE" "$ISO_ROOT/installer-initramfs.img"
 
-    # Larch OS to be installed — the installer unpacks the squashfs onto the
+    # Larch OS to be installed — the installer writes the squashfs raw onto the
     # LARCHSYS partition and copies the kernel to the EFI partition
     [ -f "$SQUASHFS_FILE" ] || \
         die "rootfs.squashfs not found — run stage 6 first"
@@ -520,12 +531,6 @@ run_stage 9 "assemble-iso — copy all files into ISO tree" && {
 
     # /etc/skel — seeded into home partition at install time
     cp -a "$ROOTFS_DIR/etc/skel/." "$ISO_ROOT/skel/" 2>/dev/null || true
-
-    # LARCHCONF stores — the installer copies each missing one onto LARCHCONF.
-    # .gitkeep only exists so git tracks the empty directories.
-    cp -a "$SCRIPT_DIR/larchconf-seed" "$ISO_ROOT/larchconf-seed"
-    rm -f "$ISO_ROOT/larchconf-seed/README.md"
-    find "$ISO_ROOT/larchconf-seed" -name .gitkeep -delete
 
     info "ISO tree assembled at $ISO_ROOT"
     du -sh "$ISO_ROOT"

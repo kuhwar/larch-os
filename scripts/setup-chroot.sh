@@ -42,9 +42,11 @@ apt-get update -qq
 # Custom kernel first (from the larch-kernel releases via scripts/fetch-kernel.sh,
 # staged in /kernel-debs by stage 4): Debian's kernel with the root-mount drivers built in, so the
 # installed system needs no initramfs. Its headers must be present before the
-# DKMS packages below (nvidia, broadcom-sta) build their modules.
+# DKMS packages below (nvidia, broadcom-sta) build their modules. Unlike Debian's
+# linux-headers-*, the bindeb-pkg headers don't depend on a compiler, so gcc and
+# make come along explicitly (clean-rootfs.sh purges both at stage 5).
 log "Installing the larch kernel"
-apt-get install -y --no-install-recommends /kernel-debs/linux-image-*.deb /kernel-debs/linux-headers-*.deb
+apt-get install -y --no-install-recommends /kernel-debs/*.deb gcc make
 
 log "Installing packages (this takes a while)"
 # Read packages.list, strip comments and blank lines
@@ -216,25 +218,6 @@ dhcp=internal
 wifi.scan-rand-mac-address=yes
 EOF
 
-# ── CUPS: redirect printer state onto a single persistable directory ─────────
-# printers.conf/classes.conf/subscriptions.conf/ppd/ hold the actual configured
-# print queues; cupsd.conf/cups-files.conf/mime.types/snmp.conf/client.conf are
-# static package config. Only the former should survive an OS image upgrade, so
-# instead of persisting all of /etc/cups (which would freeze the daemon config
-# at install time), redirect just the queue state to /etc/cups/larch-state via
-# symlinks and bind-mount *that* directory from LARCHCONF (installer + fstab
-# line; see installer/install.sh and 10-persist-printers.conf below). This
-# mirrors the /etc/NetworkManager/system-connections pattern: only user/runtime
-# generated content is persisted, package-shipped config always comes fresh
-# from the image.
-log "Redirecting CUPS printer state to /etc/cups/larch-state"
-rm -f /etc/cups/printers.conf /etc/cups/classes.conf /etc/cups/subscriptions.conf
-rm -rf /etc/cups/ppd
-ln -s larch-state/printers.conf      /etc/cups/printers.conf
-ln -s larch-state/classes.conf       /etc/cups/classes.conf
-ln -s larch-state/subscriptions.conf /etc/cups/subscriptions.conf
-ln -s larch-state/ppd                /etc/cups/ppd
-
 # ── Kernel: no initramfs ─────────────────────────────────────────────────────
 # The kernel mounts the root partition (LARCHSYS) itself; nothing builds an
 # initramfs for the installed system.
@@ -244,7 +227,7 @@ ls /boot/vmlinuz* 2>/dev/null || log "WARNING: no kernel found in /boot"
 # ── Read-only root: mount points must ship in the image ──────────────────────
 # / is mounted read-only, so systemd can't create mount points at boot
 # (x-systemd.mkdir fails). Create every fstab target that packages don't.
-mkdir -p /etc/larch-conf /etc/cups/larch-state /media /var/tmp
+mkdir -p /larch-conf /media /var/tmp
 
 # ── Console / TTY hardening (immutable system) ───────────────────────────────
 log "Hardening console access"
