@@ -19,10 +19,11 @@
 #                          (systemd.machine_id=, systemd.hostname=).
 #   2. LARCHSYS  (squashfs) — rootfs.squashfs written byte-for-byte onto the
 #                          partition; identical on every install.
-#   3. LARCHCONF (ext4)  — /larch-conf: etc/ + etc-work/, the upper layer of the
+#   3. LARCHCONF (ext4)  — /conf: etc/ + etc-work/, the upper layer of the
 #                          overlay on /etc, starting with this machine's
-#                          hostname, hosts, machine-id and account files; and a
-#                          copy of the image's /var (bind-mounted over /var).
+#                          hostname, hosts, machine-id and account files; and
+#                          var/ + var-work/, the (initially empty) upper layer
+#                          of the overlay on /var.
 #   4. LARCHHOME (ext4)  — /home/<username>, seeded from /etc/skel.
 #
 # There is no in-place update on this layout yet: every run is a clean install.
@@ -169,8 +170,7 @@ dd if="$_img" of="$PART2" bs=4M conv=fsync 2>/dev/null \
     || die "Failed to write rootfs.squashfs to $PART2"
 unset _img
 
-# Mounted only to read the image's /etc (the identity files start from it) and
-# /var (copied to LARCHCONF below).
+# Mounted only to read the image's /etc (the identity files start from it).
 mkdir -p "$MOUNT_SYS"
 mount_or_die squashfs "$PART2" "$MOUNT_SYS"
 
@@ -184,12 +184,13 @@ mkfs.ext4 -F -L LARCHCONF -m 0 "$PART3" >/dev/null 2>&1
 mount_or_die ext4 "$PART3" "$MOUNT_CONF"
 
 show_step "Seeding config partition"
-# /var is bind-mounted from here over the read-only root's /var.
-cp -a "$MOUNT_SYS/var" "$MOUNT_CONF/var"
+# /var's overlay upper layer starts empty: everything comes from the image
+# until a service writes it. Its root's mode/owner become /var's.
+mkdir -m 0755 "$MOUNT_CONF/var"
 show_step "Writing machine config into the config partition"
 apply_machine_config "$MOUNT_SYS" "$CONFIG_TMP" "$LARCH_USERNAME" "$MOUNT_CONF/etc"
-# overlayfs's workdir: empty, on the same filesystem as the upper layer.
-mkdir -m 0700 "$MOUNT_CONF/etc-work"
+# overlayfs's workdirs: empty, on the same filesystem as the upper layers.
+mkdir -m 0700 "$MOUNT_CONF/etc-work" "$MOUNT_CONF/var-work"
 
 sync
 umount "$MOUNT_CONF"

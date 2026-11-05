@@ -37,14 +37,15 @@ file, this section wins.
   2. `LARCHSYS` — 1 GiB, `rootfs.squashfs` `dd`'d onto the partition (no
      filesystem label — matched by PARTLABEL). Mounted
      `root=PARTLABEL=LARCHSYS rootfstype=squashfs ro rootwait`.
-  3. `LARCHCONF` — ext4, 1 GiB, mounted at `/larch-conf` (outside `/etc`, which
+  3. `LARCHCONF` — ext4, 1 GiB, mounted at `/conf` (outside `/etc`, which
      the overlay would hide it under): `etc/` + `etc-work/` (the `/etc` overlay's
      upper and work dirs; the installer seeds `etc/` with this machine's
      hostname, hosts, machine-id, passwd/shadow, group/gshadow, subuid/subgid —
      `apply_machine_config` in `installer/lib/helpers.sh`, built from the image's
-     files), `var/` (a copy of the image's `/var`, bind-mounted over `/var`)
+     files), `var/` + `var-work/` (the `/var` overlay's upper and work dirs, empty at
+     install)
   4. `LARCHHOME` — ext4, remainder, `/home`
-- **`/etc` overlay:** `lowerdir=/etc` (the image's), `upperdir=/larch-conf/etc`,
+- **`/etc` overlay:** `lowerdir=/etc` (the image's), `upperdir=/conf/etc`,
   mounted from fstab. Rename-based writers (`passwd`, `usermod`, timedated,
   NetworkManager, CUPS, …) just work and persist, so the per-path binds, the
   `RequiresMountsFor` drop-ins, the CUPS `larch-state` redirect,
@@ -57,8 +58,14 @@ file, this section wins.
   `/var/lib/dbus/machine-id` → it; set in stage 6), and the installer appends
   `systemd.machine_id=<id> systemd.hostname=<host>` to the loader entries on
   LARCHEFI, matching the upper layer's copies.
-- **fstab:** `/` squashfs ro (PARTLABEL), LARCHCONF at `/larch-conf` (not
-  `nofail`), the `/etc` overlay, `/var` bind from LARCHCONF, `/var/tmp` and
+- **`/var` overlay:** same shape, `lowerdir=/var`, `upperdir=/conf/var`,
+  so image-owned `/var` files nobody rewrote (systemd catalog, xml-core,
+  cracklib, the Flathub remote) follow the booted image. Caveat for a future
+  update mechanism: the new image's `/var/.updated` shows through, so
+  `ConditionNeedsUpdate=/var` services won't rerun unless the upper layer's
+  stamp is reconciled.
+- **fstab:** `/` squashfs ro (PARTLABEL), LARCHCONF at `/conf` (not
+  `nofail`), the `/etc` and `/var` overlays, `/var/tmp` and
   `/media` tmpfs, `/home`. Mount points must exist in the image (`setup-chroot.sh`
   creates them) since nothing can be created on `/` at boot. `/etc/resolv.conf`
   is a symlink to `/run/NetworkManager/resolv.conf` (set at the end of stage 4).

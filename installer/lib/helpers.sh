@@ -4,8 +4,9 @@
 ISO_MOUNT="/mnt/iso"
 EFI_PART_SIZE="512MiB"
 SYS_PART_SIZE="1GiB"
-# LARCHCONF holds all of /var (journal capped at 64M, Flatpak system installs
-# excluded — those go to --user in /home), so it is larger than on master.
+# LARCHCONF holds the upper layers of /etc and /var, i.e. all runtime state
+# (journal capped at 64M, Flatpak system installs excluded — those go to --user
+# in /home), so it is larger than on master.
 CONF_PART_SIZE="1GiB"
 TARGET_DISK=""
 AUTO_YES=0

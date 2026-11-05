@@ -20,17 +20,19 @@
 # machine-id / hostname come from the kernel command line (systemd.machine_id=,
 # systemd.hostname=), matching the upper layer's copies.
 #
-# /var lives on LARCHCONF (the installer copies the image's /var there), so
-# every service's state (NetworkManager, Bluetooth, AccountsService, journal,
-# timers, …) persists without per-directory binds. /var/tmp is tmpfs so
-# unbounded temp files can't fill LARCHCONF. LARCHHOME holds the user's home at
+# /var is overlaid the same way: the image's /var (lower) under LARCHCONF/var
+# (upper), so every service's state (NetworkManager, Bluetooth,
+# AccountsService, journal, timers, …) persists without per-directory binds,
+# while image-owned files nobody has changed (catalogs, caches, the Flathub
+# remote) come from whatever image is booted. /var/tmp is tmpfs so unbounded
+# temp files can't fill LARCHCONF. LARCHHOME holds the user's home at
 # /home/<username>. udisks mounts removable drives under /media/<user>, which it
 # must create, hence the tmpfs there.
 
 PARTLABEL=LARCHSYS       /           squashfs  ro                                             0  0
-LABEL=LARCHCONF          /larch-conf ext4      defaults,relatime                              0  2
-overlay                  /etc        overlay   lowerdir=/etc,upperdir=/larch-conf/etc,workdir=/larch-conf/etc-work,x-systemd.requires-mounts-for=/larch-conf  0  0
-/larch-conf/var          /var        none      bind                                           0  0
+LABEL=LARCHCONF          /conf       ext4      defaults,relatime                              0  2
+overlay                  /etc        overlay   lowerdir=/etc,upperdir=/conf/etc,workdir=/conf/etc-work,x-systemd.requires-mounts-for=/conf  0  0
+overlay                  /var        overlay   lowerdir=/var,upperdir=/conf/var,workdir=/conf/var-work,x-systemd.requires-mounts-for=/conf  0  0
 tmpfs                    /var/tmp    tmpfs     mode=1777,nosuid,nodev,size=25%                0  0
 LABEL=LARCHHOME          /home       ext4      defaults,relatime,nofail                       0  2
 tmpfs                    /media      tmpfs     mode=0755,nosuid,nodev                         0  0

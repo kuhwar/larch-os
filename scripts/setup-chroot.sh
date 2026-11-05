@@ -227,7 +227,7 @@ ls /boot/vmlinuz* 2>/dev/null || log "WARNING: no kernel found in /boot"
 # ── Read-only root: mount points must ship in the image ──────────────────────
 # / is mounted read-only, so systemd can't create mount points at boot
 # (x-systemd.mkdir fails). Create every fstab target that packages don't.
-mkdir -p /larch-conf /media /var/tmp
+mkdir -p /conf /media /var/tmp
 
 # ── Console / TTY hardening (immutable system) ───────────────────────────────
 log "Hardening console access"
