@@ -62,8 +62,8 @@ libcrypt-dev
 rpcsvc-proto
 
 # Debian branding themes (~17 MB). Its gschema override points the wallpaper at
-# a Debian theme; clean-rootfs.sh recompiles schemas afterwards so the GNOME
-# default (backgrounds/gnome/adwaita-*.jpg) applies.
+# a Debian theme; clean-rootfs.sh recompiles schemas afterwards so larch-os's
+# own wallpaper (90_larch.gschema.override) applies.
 desktop-base
 
 # cron (Debian "important" priority, pulled in by debootstrap). systemd timers

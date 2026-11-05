@@ -70,11 +70,12 @@ rm -rf \
     2>/dev/null || true
 
 # ── Trim wallpapers ──────────────────────────────────────────────────────────
-# Keep only the GNOME default (adwaita light/dark), which is what
-# org.gnome.desktop.background points at once desktop-base's override is gone.
+# The only wallpaper is larch-os's own (rootfs-overlay/usr/share/backgrounds/larch,
+# set by 90_larch.gschema.override). Drop any other a dependency pulled in, so
+# GNOME Settings → Appearance offers just that one.
 log "Trimming wallpapers"
-find /usr/share/backgrounds/gnome -mindepth 1 ! -name 'adwaita-*' -delete 2>/dev/null || true
-find /usr/share/gnome-background-properties -mindepth 1 ! -name 'adwaita.xml' -delete 2>/dev/null || true
+find /usr/share/backgrounds -mindepth 1 -maxdepth 1 ! -name larch -exec rm -rf {} + 2>/dev/null || true
+find /usr/share/gnome-background-properties -mindepth 1 ! -name 'larch.xml' -delete 2>/dev/null || true
 rm -f /usr/share/glib-2.0/schemas/10_desktop-base.gschema.override
 glib-compile-schemas /usr/share/glib-2.0/schemas
 

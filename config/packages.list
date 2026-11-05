@@ -69,7 +69,6 @@ gnome-session
 gnome-settings-daemon
 gnome-keyring
 gnome-control-center
-gnome-backgrounds
 gnome-themes-extra
 adwaita-icon-theme
 nautilus
