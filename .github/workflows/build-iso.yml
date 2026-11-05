@@ -4,8 +4,13 @@ name: Build ISO
 # ./docker-build.sh used locally) and publishes it as a GitHub Release asset.
 #
 #   - Push a version tag (v*)      → build + create a Release with the ISO
-#   - Run manually (workflow_dispatch) → build + upload the ISO as a workflow
+#                                    and the root squashfs
+#   - Run manually (workflow_dispatch) → build + upload them as a workflow
 #                                        artifact only (no Release)
+#
+# The squashfs (work/rootfs.squashfs, the exact image the ISO carries and the
+# installer writes raw onto LARCHSYS) is published as larch-os-rootfs.squashfs
+# so an installed system can fetch it for an in-place update without the ISO.
 #
 # The build needs privileged Docker (chroot / mount --bind / mknod); GitHub
 # hosted ubuntu-latest runners support this.
@@ -42,11 +47,15 @@ jobs:
           ./docker-build.sh        # docker build + docker run --privileged
 
       - name: Prepare artifacts
-        # output/larch-os.iso is written by the privileged container as root.
+        # output/ and work/ are written by the privileged container as root.
+        # work/ is discarded after this job, so move the squashfs instead of
+        # copying ~1 GiB.
         run: |
-          sudo chown "$USER" output/larch-os.iso
+          sudo mv work/rootfs.squashfs output/larch-os-rootfs.squashfs
+          sudo chown "$USER" output/larch-os.iso output/larch-os-rootfs.squashfs
           cd output
           sha256sum larch-os.iso > larch-os.iso.sha256
+          sha256sum larch-os-rootfs.squashfs > larch-os-rootfs.squashfs.sha256
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
@@ -55,6 +64,8 @@ jobs:
           path: |
             output/larch-os.iso
             output/larch-os.iso.sha256
+            output/larch-os-rootfs.squashfs
+            output/larch-os-rootfs.squashfs.sha256
 
       - name: Publish Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -63,3 +74,5 @@ jobs:
           files: |
             output/larch-os.iso
             output/larch-os.iso.sha256
+            output/larch-os-rootfs.squashfs
+            output/larch-os-rootfs.squashfs.sha256
