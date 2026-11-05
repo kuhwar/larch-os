@@ -69,6 +69,13 @@ file, this section wins.
   `/media` tmpfs, `/home`. Mount points must exist in the image (`setup-chroot.sh`
   creates them) since nothing can be created on `/` at boot. `/etc/resolv.conf`
   is a symlink to `/run/NetworkManager/resolv.conf` (set at the end of stage 4).
+- **Image trimming** (for the 1 GiB LARCHSYS): `config/remove.list` purges
+  onnxruntime (pulled in by PipeWire's ONNX plugin) and full perl (`perl-base`
+  stays); `config/remove-files.list` deletes Mesa's Asahi/Freedreno Vulkan
+  drivers and firmware for routers/ARM SoCs/server NICs (`ti/` and `nxp/` are
+  kept deliberately); `clean-rootfs.sh` itself drops every iwlwifi `.ucode`
+  except the highest API ≤ the kernel's maximum per chip (read via `modinfo`
+  from the installed iwlwifi modules, so it follows kernel upgrades).
 - **No in-place update:** `installer/lib/update.sh` is gone; every install wipes the disk.
 - **Known gaps:** a unit enabled at runtime (in the upper `/etc/systemd`) is
   invisible to PID 1 at boot, since it loads units before the overlay mounts;
@@ -104,6 +111,7 @@ It then **wipes the target disk** and creates **three partitions**:
 - **Single fixed user.** The account created at install time is the only user. There is **no facility to add or remove users** afterward — user management is intentionally absent. `rootfs-overlay/etc/polkit-1/rules.d/99-larch-users.rules` denies `org.freedesktop.accounts.user-administration` and `org.gnome.controlcenter.user-accounts.administration` (add/delete users, account type, autologin in GNOME Settings → Users); the user can still change their own password, name and avatar (`change-own-*` actions).
 - **No remote shell.** No SSH server ships in the image, and `rootfs-overlay/etc/polkit-1/rules.d/99-larch-ssh.rules` denies `org.gnome.controlcenter.remote-login-helper`, so GNOME Settings → System → Secure Shell can never enable `ssh.service`. The row itself stays visible (it is compiled into gnome-control-center with no visibility hook).
 - **Graphical login only.** No text consoles: `rootfs-overlay/etc/systemd/logind.conf.d/10-larch-no-vt.conf` sets `NAutoVTs=0`/`ReserveVT=0`, and `getty@tty1`/`autovt@` are masked via `/dev/null` symlinks in `rootfs-overlay/etc/systemd/system/`. No cron either (`cron` is in `config/remove.list`; systemd timers cover scheduling), and `clean-rootfs.sh` deletes dpkg's `dpkg-db-backup` timer along with dpkg.
+- **Minimal setuid set.** `config/remove-files.list` deletes `su`, `chfn`, `chsh`, `gpasswd`, `chage` (and their PAM files) and `gst-ptp-helper`; `clean-rootfs.sh` strips setuid from `mount`/`umount`. What stays privileged: `passwd`, `unix_chkpwd`, `dbus-daemon-launch-helper`, `fusermount3`, `newuidmap`/`newgidmap`, `nvidia-modprobe`.
 - **Core desktop only:** base GNOME (Wayland), **Nautilus** as the file manager, and **GNOME Terminal**. Nothing beyond the minimal desktop ships in the core image.
 - **No package manager.** Software is installed solely via the **`flatpak` CLI** against Flathub. The base OS cannot be modified by the user; only Flatpak apps and `/home` change. **AppImages** also run from `/home`: the image ships `libfuse2t64` (the classic type-2 runtime's `libfuse.so.2`) and fuse3's setuid `fusermount`/`fusermount3`; desktop integration is left to Flathub's Gear Lever. **Rootless containers** (Podman) are user-installed too — a static build under `~/.local`; the image only ships `uidmap` (setuid `newuidmap`/`newgidmap`, which can't live in `/home`) so the user's `/etc/subuid`/`/etc/subgid` range can be mapped. Container root is the user's own UID, never host root.
 
@@ -149,7 +157,7 @@ sudo make install-deps
 |---|---|
 | `rootfs-overlay/` files | `./docker-build.sh --stage 3` |
 | `config/packages.list` or `scripts/setup-chroot.sh` | `./docker-build.sh --stage 4` |
-| `scripts/clean-rootfs.sh` or `config/remove.list` | `./docker-build.sh --stage 5` |
+| `scripts/clean-rootfs.sh`, `config/remove.list` or `config/remove-files.list` | `./docker-build.sh --stage 5` |
 | `rootfs-overlay/` or any rootfs content | `./docker-build.sh --stage 6` (squashfs rebuild) |
 | `config/squashfs.exclude` | `./docker-build.sh --stage 6` |
 | `initramfs/os/` (init or modules.list) | `./docker-build.sh --stage 7` |
@@ -354,7 +362,8 @@ Partition 3 — ext4, remainder, label LARCHHOME   (mounted at /home)
 | `scripts/setup-chroot.sh` | Installs packages, creates default user `larch` (password `larch`), enables GDM/NetworkManager/PipeWire, adds Flathub remote, configures polkit for Flatpak |
 | `scripts/clean-rootfs.sh` | Purges apt/dpkg and dev artifacts from rootfs before squashfs |
 | `config/packages.list` | Packages installed by `setup-chroot.sh` (comments and blank lines stripped) |
-| `config/remove.list` | Packages purged by `clean-rootfs.sh` after configuration |
+| `config/remove.list` | Packages purged by `clean-rootfs.sh` after configuration (globs allowed; `!pattern` keeps matches) |
+| `config/remove-files.list` | Paths (globs allowed) deleted by `clean-rootfs.sh` — for files of packages that must stay, and unowned build leftovers |
 | `initramfs/os/init` | OS initramfs init — busybox sh PID 1 on the **installed disk**; finds LARCHOS, loop-mounts `rootfs.squashfs`, builds overlayfs, applies config, `switch_root`s to systemd |
 | `initramfs/os/modules.list` | Modules for the OS initramfs (squashfs/overlay + storage/FAT drivers to find LARCHOS and mount the squashfs) |
 | `initramfs/installer/init` | Installer initramfs init — busybox sh PID 1 on the **ISO**; finds `LABEL=LARCHISO`, mounts the ISO at `/mnt/iso`, then `exec`s `larch-install` |
