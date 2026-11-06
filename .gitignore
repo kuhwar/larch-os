@@ -1,6 +1,7 @@
 # Build artifacts
 work/
 output/
+kernel-cache/
 
 # ISO and intermediate images that may be written to the project root
 larch-os.iso

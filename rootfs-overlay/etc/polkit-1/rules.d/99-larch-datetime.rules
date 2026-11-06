@@ -3,9 +3,9 @@
 // the clock. They default to auth_admin, but larch-os has no admin identity
 // (see 99-larch-cups.rules). Automatic Time Zone also needs set-timezone:
 // gsd-datetime calls timedated from the user's session. datetime.configure is
-// GNOME Settings' own permission that unlocks the page. The timezone is
-// persisted to LARCHCONF by larch-persist-timezone.path; turning network time
-// off only lasts until reboot (the unit state lives in the tmpfs /etc).
+// GNOME Settings' own permission that unlocks the page. timedated's changes
+// (the /etc/localtime link, network time on/off) land in /etc's upper layer
+// on LARCHCONF, so they persist.
 polkit.addRule(function(action, subject) {
     if ((action.id == "org.freedesktop.timedate1.set-timezone" ||
          action.id == "org.freedesktop.timedate1.set-ntp" ||

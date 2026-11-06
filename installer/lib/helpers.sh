@@ -2,11 +2,16 @@
 # Sourced by install.sh; not executable on its own.
 
 ISO_MOUNT="/mnt/iso"
-OS_PART_SIZE="3GiB"
-CONF_PART_SIZE="512MiB"
+EFI_PART_SIZE="512MiB"
+SYS_PART_SIZE="1GiB"
+# LARCHCONF holds the upper layers of /etc and /var, i.e. all runtime state
+# (journal capped at 64M, Flatpak system installs excluded — those go to --user
+# in /home), so it is larger than on master.
+CONF_PART_SIZE="1GiB"
 TARGET_DISK=""
 AUTO_YES=0
-MOUNT_OS="/run/larch-target-os"
+MOUNT_EFI="/run/larch-target-efi"
+MOUNT_SYS="/run/larch-target-sys"
 MOUNT_CONF="/run/larch-target-conf"
 MOUNT_HOME="/run/larch-target-home"
 
@@ -26,39 +31,52 @@ die() {
 info() { echo "  >> $*"; }
 nl()   { echo ""; }
 
-# Install the account files into accounts/ on a mounted LARCHCONF.
-# Usage: seed_accounts <larchconf-mount> <passwd-file> <shadow-file>
-seed_accounts() {
-    mkdir -p "$1/accounts"
-    chown 0:0 "$1/accounts"
-    chmod 0700 "$1/accounts"
-    cp "$2" "$1/accounts/passwd"
-    cp "$3" "$1/accounts/shadow"
-    chown 0:0 "$1/accounts/passwd" "$1/accounts/shadow"
-    chmod 0644 "$1/accounts/passwd"
-    chmod 0600 "$1/accounts/shadow"
-}
+# Write this machine's identity files into <out-dir> (LARCHCONF's etc/, the
+# upper layer of the /etc overlay): hostname, hosts, machine-id, and the account
+# databases with the user in place of the image's UID-1000 placeholder "larch".
+# Each starts as a cp -p of the image's file (read from the mounted LARCHSYS) and
+# is rewritten with `cat >`, so it keeps the image's owner and mode (e.g. shadow:
+# root:shadow 0640) — the same result as an overlay copy-up.
+# Usage: apply_machine_config <image-root> <config-dir> <username> <out-dir>
+apply_machine_config() {
+    _root="$1"; _cfg="$2"; _user="$3"; _out="$4"
 
-# Copy each top-level directory of the ISO's larchconf-seed/ onto a mounted
-# LARCHCONF, skipping any that already exist there (never clobbers live state).
-# ISO9660 drops modes, so they're set here: root-owned, directories get the mode
-# in a sibling <name>.mode file (default 0700), files the same minus execute.
-# Usage: seed_larchconf <larchconf-mount>
-seed_larchconf() {
-    for _src in "$ISO_MOUNT/larchconf-seed"/*/; do
-        [ -d "$_src" ] || continue
-        _name=$(basename "$_src")
-        [ -e "$1/$_name" ] && continue
-        _mode=0700
-        if [ -f "$ISO_MOUNT/larchconf-seed/$_name.mode" ]; then
-            _mode=$(cat "$ISO_MOUNT/larchconf-seed/$_name.mode")
-        fi
-        cp -R "${_src%/}" "$1/"
-        chown -R 0:0 "$1/$_name"
-        find "$1/$_name" -type d -exec chmod "$_mode" {} \;
-        find "$1/$_name" -type f -exec chmod "$_mode" {} \; -exec chmod a-x {} \;
+    mkdir -p "$_out"
+    chown 0:0 "$_out"
+    chmod 0755 "$_out"
+    for _f in hostname hosts machine-id passwd shadow group gshadow subuid subgid; do
+        cp -p "$_root/etc/$_f" "$_out/$_f"
     done
-    unset _src _name _mode
+
+    cat "$_cfg/hostname"   > "$_out/hostname"
+    cat "$_cfg/hosts"      > "$_out/hosts"
+    cat "$_cfg/machine-id" > "$_out/machine-id"
+
+    # passwd: drop any UID-1000 line, append the installed user.
+    grep -v '^[^:]*:[^:]*:1000:' "$_root/etc/passwd" > "$_cfg/passwd.new" || true
+    cat "$_cfg/passwd" >> "$_cfg/passwd.new"
+    cat "$_cfg/passwd.new" > "$_out/passwd"
+    # shadow: drop the placeholder's entry, append the hashed installer entry.
+    grep -v "^larch:\|^${_user}:" "$_root/etc/shadow" > "$_cfg/shadow.new" || true
+    cat "$_cfg/shadow" >> "$_cfg/shadow.new"
+    cat "$_cfg/shadow.new" > "$_out/shadow"
+    rm -f "$_cfg/passwd.new" "$_cfg/shadow.new"
+
+    if [ "$_user" != "larch" ]; then
+        # Group memberships (word-boundary-safe) and the subordinate ID range
+        # for rootless containers move to the installed username.
+        for _f in group gshadow; do
+            sed "s/\blarch\b/$_user/g" "$_root/etc/$_f" > "$_cfg/$_f.new"
+            cat "$_cfg/$_f.new" > "$_out/$_f"
+            rm -f "$_cfg/$_f.new"
+        done
+        for _f in subuid subgid; do
+            sed "s/^larch:/$_user:/" "$_root/etc/$_f" > "$_cfg/$_f.new"
+            cat "$_cfg/$_f.new" > "$_out/$_f"
+            rm -f "$_cfg/$_f.new"
+        done
+    fi
+    unset _root _cfg _user _out _f
 }
 
 # Wipe the screen (used to clear dialog's drawing before/after plain output).
@@ -100,7 +118,8 @@ dialog --print-maxsize >/dev/null 2>&1 \
     || die "dialog cannot initialise the terminal (TERM=$TERM, TERMINFO=$TERMINFO)"
 
 cleanup() {
-    umount "$MOUNT_OS"   2>/dev/null || true
+    umount "$MOUNT_EFI"  2>/dev/null || true
+    umount "$MOUNT_SYS"  2>/dev/null || true
     umount "$MOUNT_CONF" 2>/dev/null || true
     umount "$MOUNT_HOME" 2>/dev/null || true
     # The dialog scratch file briefly holds the typed password — remove it.

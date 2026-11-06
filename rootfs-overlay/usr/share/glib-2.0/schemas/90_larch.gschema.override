@@ -8,3 +8,18 @@ automatic-timezone=true
 
 [org.gnome.system.location]
 enabled=true
+
+# Dark style by default.
+[org.gnome.desktop.interface]
+color-scheme='prefer-dark'
+
+# The one wallpaper the image ships (/usr/share/backgrounds/larch), for both
+# styles and the lock screen.
+[org.gnome.desktop.background]
+picture-uri='file:///usr/share/backgrounds/larch/larch.jpg'
+picture-uri-dark='file:///usr/share/backgrounds/larch/larch.jpg'
+picture-options='zoom'
+
+[org.gnome.desktop.screensaver]
+picture-uri='file:///usr/share/backgrounds/larch/larch.jpg'
+picture-options='zoom'

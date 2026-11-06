@@ -35,16 +35,12 @@ install-deps: ## Install host-side tools for QEMU testing (the build itself only
 squashfs: ## Re-run squashfs stage only (stage 6) — use after rootfs edits
 	$(BUILD) --stage 6
 
-.PHONY: initramfs
-initramfs: ## Re-pack the bootable OS initramfs from the existing squashfs (stage 7). NOTE: installer/payload/module changes live in the squashfs — use `make squashfs` (stage 6) for those.
-	$(BUILD) --only 7
-
 .PHONY: iso-only
 iso-only: ## Re-assemble and re-pack ISO (stages 8+9) — skips rootfs build
 	$(BUILD) --stage 8
 
 ## ── Docker build modes ───────────────────────────────────────────────────────
-# `iso`, `clean`, `squashfs`, `initramfs`, `iso-only` above already run in Docker.
+# `iso`, `clean`, `squashfs`, `iso-only` above already run in Docker.
 # These expose modes the main targets don't.
 
 .PHONY: docker-dev

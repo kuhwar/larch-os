@@ -1,0 +1,22 @@
+#!/bin/sh
+# busybox udhcpc hook for the updater initramfs: apply the lease (address,
+# default route, DNS). Installed as /usr/share/udhcpc/default.script.
+
+case "$1" in
+    deconfig)
+        ip addr flush dev "$interface" 2>/dev/null
+        ip link set "$interface" up
+        ;;
+    bound|renew)
+        ifconfig "$interface" "$ip" netmask "${subnet:-255.255.255.0}" up
+        while ip route del default dev "$interface" 2>/dev/null; do :; done
+        for _r in $router; do
+            ip route add default via "$_r" dev "$interface" && break
+        done
+        : > /etc/resolv.conf
+        for _d in $dns; do
+            echo "nameserver $_d" >> /etc/resolv.conf
+        done
+        ;;
+esac
+exit 0

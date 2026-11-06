@@ -1,8 +1,0 @@
-# Started by larch-persist-accounts.path — see there.
-[Unit]
-Description=Persist user account changes to LARCHCONF
-RequiresMountsFor=/etc/larch-conf
-
-[Service]
-Type=oneshot
-ExecStart=/usr/libexec/larch-persist-accounts

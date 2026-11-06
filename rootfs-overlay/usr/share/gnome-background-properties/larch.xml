@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE wallpapers SYSTEM "gnome-wp-list.dtd">
+<!-- The only wallpaper offered in GNOME Settings → Appearance.
+     Photo by Andrew Kliatskyi on Unsplash (Unsplash License). -->
+<wallpapers>
+  <wallpaper deleted="false">
+    <name>Larch</name>
+    <filename>/usr/share/backgrounds/larch/larch.jpg</filename>
+    <filename-dark>/usr/share/backgrounds/larch/larch.jpg</filename-dark>
+    <options>zoom</options>
+    <shade_type>solid</shade_type>
+    <pcolor>#000000</pcolor>
+    <scolor>#000000</scolor>
+  </wallpaper>
+</wallpapers>

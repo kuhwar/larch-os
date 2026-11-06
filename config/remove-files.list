@@ -1,0 +1,149 @@
+# Files and directories deleted from the rootfs before squashfs (stage 5,
+# scripts/clean-rootfs.sh, after the remove.list purge). For things whose
+# package must stay (essential, or a dependency of something needed), and for
+# build leftovers no package owns.
+#
+# One absolute path per line, removed recursively (rm -rf); # comments and
+# blank lines are ignored. Shell globs are expanded inside the rootfs; a path
+# or glob that matches nothing is skipped. Don't list "/" or top-level dirs.
+# Logic that a plain list can't express (iwlwifi firmware selection, the
+# wallpaper allow-list, chmod) stays in clean-rootfs.sh.
+
+# ── Package manager ──────────────────────────────────────────────────────────
+/usr/bin/apt*
+/usr/bin/dpkg*
+/usr/lib/apt
+/usr/lib/dpkg
+/var/lib/apt
+/var/lib/dpkg
+/var/cache/apt
+/var/cache/debconf
+/etc/apt
+/etc/dpkg
+/usr/lib/python3/dist-packages/apt*
+/usr/lib/python3/dist-packages/debian*
+# dpkg's own daily backup job would fail every run once dpkg is gone.
+/usr/lib/systemd/system/dpkg-db-backup.service
+/usr/lib/systemd/system/dpkg-db-backup.timer
+/etc/systemd/system/timers.target.wants/dpkg-db-backup.timer
+/etc/cron.daily/dpkg
+
+# ── Build leftovers ──────────────────────────────────────────────────────────
+# Whatever the toolchain purge left behind (cc1 alone is ~60 MB).
+/usr/libexec/gcc
+/usr/lib/gcc
+/usr/bin/gcc
+# Dev headers; static/libtool archives are found by name in clean-rootfs.sh.
+/usr/include/*
+# DKMS sources: broadcom-sta-dkms and nvidia-kernel-dkms built their .ko into
+# /lib/modules at stage 4.
+/usr/src/linux-headers-*
+/usr/src/broadcom-sta-*
+/usr/src/nvidia-*
+/var/lib/dkms
+/usr/lib/modules/*/build
+/usr/lib/modules/*/source
+
+# ── Docs ─────────────────────────────────────────────────────────────────────
+# Translations (/usr/share/locale) and translated GNOME help are kept: every
+# language is selectable. /usr/share/i18n is only the source data locale-gen
+# compiles from (setup-chroot.sh already compiled every locale into
+# /usr/lib/locale/locale-archive).
+/usr/share/doc
+/usr/share/man
+/usr/share/info
+/usr/share/i18n
+
+# ── Setuid/setgid helpers with no job on this design ─────────────────────────
+# Their packages (util-linux, passwd, gstreamer) are essential or depended on.
+# Kept: passwd (GNOME Settings runs it as the user), unix_chkpwd (lock screen),
+# dbus-daemon-launch-helper, fusermount3 (AppImage, gvfs, document portal),
+# newuidmap/newgidmap (rootless Podman), nvidia-modprobe (CUDA loads
+# nvidia-uvm on demand). mount/umount lose setuid in clean-rootfs.sh.
+# su: root is locked; the only other account is the user's own.
+/usr/bin/su
+/etc/pam.d/su
+/etc/pam.d/su-l
+# chfn: GNOME renames via AccountsService (usermod, as root).
+/usr/bin/chfn
+/etc/pam.d/chfn
+# chsh: bash is the only shell, and none can be installed.
+/usr/bin/chsh
+/etc/pam.d/chsh
+# gpasswd: group administration; no group has administrators.
+/usr/bin/gpasswd
+# chage: password ageing (setgid shadow); nothing uses it.
+/usr/bin/chage
+# GStreamer's PTP clock helper (file capabilities, for AES67 network audio).
+/usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-ptp-helper
+
+# ── PipeWire's ONNX plugin (onnxruntime itself is in remove.list) ────────────
+/usr/lib/x86_64-linux-gnu/spa-0.2/filter-graph/libspa-filter-graph-plugin-onnx.so
+
+# ── colord's SANE helper and sensor plugin (SANE itself is in remove.list) ──
+/usr/libexec/colord-sane
+/usr/lib/x86_64-linux-gnu/colord-plugins/libcolord_sensor_sane.so
+
+# ── GUI bits of system-config-printer ────────────────────────────────────────
+# Only its D-Bus service (org.fedoraproject.Config.Printing) is needed, by
+# GNOME Settings' Printers panel. The "Print Settings" launcher duplicates
+# Settings, and GNOME has no tray for the applet (gsd-print-notifications
+# covers printer notifications).
+/usr/share/applications/system-config-printer.desktop
+/etc/xdg/autostart/print-applet.desktop
+
+# ── Vulkan drivers that never apply ──────────────────────────────────────────
+# Debian's amd64 Mesa builds every driver. lvp = software (llvmpipe) Vulkan;
+# gfxstream/virtio = VM-guest-only; Asahi (Apple Silicon) and Freedreno
+# (Qualcomm Adreno) GPUs never appear on an x86 PC. GTK4 falls back to its GL
+# renderer without a hardware Vulkan ICD; Flatpak apps bring their own Mesa.
+/usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
+/usr/lib/x86_64-linux-gnu/libvulkan_gfxstream.so
+/usr/lib/x86_64-linux-gnu/libvulkan_virtio.so
+/usr/lib/x86_64-linux-gnu/libvulkan_asahi.so
+/usr/lib/x86_64-linux-gnu/libvulkan_freedreno.so
+/usr/share/vulkan/icd.d/lvp_icd*.json
+/usr/share/vulkan/icd.d/gfxstream*_icd*.json
+/usr/share/vulkan/icd.d/virtio_icd*.json
+/usr/share/vulkan/icd.d/asahi_icd*.json
+/usr/share/vulkan/icd.d/freedreno_icd*.json
+
+# ── Firmware for hardware that's never in a PC (~100 MB raw) ─────────────────
+# Kept on purpose: ti/ (TAS2781-family laptop amplifiers) and nxp/ (BT/Wi-Fi
+# modules). Dangling compatibility symlinks are cleaned up by clean-rootfs.sh.
+# MediaTek Filogic router/AP SoCs and cards.
+/usr/lib/firmware/mediatek/mt7622*
+/usr/lib/firmware/mediatek/mt7981*
+/usr/lib/firmware/mediatek/mt7986*
+/usr/lib/firmware/mediatek/mt7987
+/usr/lib/firmware/mediatek/mt7988
+/usr/lib/firmware/mediatek/mt7996
+# MediaTek mt81xx ARM Chromebook SoCs, incl. their SOF audio DSP.
+/usr/lib/firmware/mediatek/mt81*
+/usr/lib/firmware/mediatek/sof
+/usr/lib/firmware/mediatek/sof-tplg
+# Qualcomm router/AP chips (IPQ/QCN, QCA4019/9888/9984/99X0) and Snapdragon
+# SoC Wi-Fi (WCN3990, WCN6750).
+/usr/lib/firmware/ath10k/QCA4019
+/usr/lib/firmware/ath10k/QCA9888
+/usr/lib/firmware/ath10k/QCA9984
+/usr/lib/firmware/ath10k/QCA99X0
+/usr/lib/firmware/ath10k/WCN3990
+/usr/lib/firmware/ath11k/IPQ*
+/usr/lib/firmware/ath11k/QCN*
+/usr/lib/firmware/ath11k/WCN6750
+/usr/lib/firmware/ath12k/IPQ*
+/usr/lib/firmware/ath12k/QCN*
+# Arm Mali GPUs, Chips&Media codecs (ARM SoCs), Chelsio server NICs, Tegra.
+/usr/lib/firmware/arm
+/usr/lib/firmware/cnm
+/usr/lib/firmware/cxgb4
+/usr/lib/firmware/nvidia/tegra*
+
+# ── Temporary files and logs from the build ──────────────────────────────────
+/tmp/*
+/var/tmp/*
+/var/log/*.log
+/var/log/*.gz
+/root/.bash_history
+/home/*/.bash_history

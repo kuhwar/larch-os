@@ -1,8 +1,0 @@
-# Started by larch-persist-timezone.path — see there.
-[Unit]
-Description=Persist the timezone to LARCHCONF
-RequiresMountsFor=/etc/larch-conf
-
-[Service]
-Type=oneshot
-ExecStart=/usr/libexec/larch-persist-timezone

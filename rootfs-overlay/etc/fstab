@@ -1,28 +1,38 @@
 # /etc/fstab — larch-os
 # Static and identical on every machine: partitions are found by label, so
-# nothing here is per-machine. Shipping it in the image means an upgrade brings
-# its new mounts along. /tmp is left to systemd's stock tmp.mount.
+# nothing here is per-machine. /tmp is left to systemd's stock tmp.mount.
+#
+# No initramfs: the kernel mounts LARCHSYS (rootfs.squashfs written raw onto the
+# partition; a squashfs has no filesystem label, hence PARTLABEL) itself, via
+# root=PARTLABEL=LARCHSYS rootfstype=squashfs in the loader entry. Every
+# writable path is a mount below, and its mount point ships in the image
+# (setup-chroot.sh), since nothing can be created on the read-only root at boot.
+#
+# LARCHCONF holds all persistent system state and is mounted outside /etc,
+# since the /etc overlay would hide a mount inside it. It isn't nofail: without
+# it /etc and /var aren't writable and the system can't come up.
+#
+# /etc is the image's /etc (read-only, lower) under LARCHCONF/etc (upper), so
+# tools that replace files by rename (passwd, usermod, timedated, …) work and
+# their changes persist. The installer writes this machine's identity into the
+# upper layer: hostname, hosts, machine-id and the account files. PID 1 reads
+# /etc before the overlay mounts: its units and fstab come from the image, and
+# machine-id / hostname come from the kernel command line (systemd.machine_id=,
+# systemd.hostname=), matching the upper layer's copies.
+#
+# /var is overlaid the same way: the image's /var (lower) under LARCHCONF/var
+# (upper), so every service's state (NetworkManager, Bluetooth,
+# AccountsService, journal, timers, …) persists without per-directory binds,
+# while image-owned files nobody has changed (catalogs, caches, the Flathub
+# remote) come from whatever image is booted. /var/tmp is tmpfs so unbounded
+# temp files can't fill LARCHCONF. LARCHHOME holds the user's home at
+# /home/<username>. udisks mounts removable drives under /media/<user>, which it
+# must create, hence the tmpfs there.
 
-# LARCHCONF: persistent, root-owned system config.
-LABEL=LARCHCONF                         /etc/larch-conf                         ext4   defaults,relatime,nofail         0  2
-
-# LARCHHOME: the user's home lives at /home/<username> on this partition.
-LABEL=LARCHHOME                         /home                                   ext4   defaults,relatime,nofail         0  2
-
-# Service state persisted on LARCHCONF: NetworkManager connections and state,
-# Bluetooth pairings, CUPS queues, AccountsService (language, avatar), the
-# journal (capped in journald.conf.d/10-larch.conf), brightness, rfkill and
-# timer stamps. Sources are created by the installer from the ISO's
-# larchconf-seed/; systemd-fstab-generator orders each bind after the
-# /etc/larch-conf mount, and each service waits for its own via
-# RequiresMountsFor (a drop-in, or implied upstream). x-systemd.mkdir where the
-# image doesn't ship the target directory.
-/etc/larch-conf/nm-system-connections   /etc/NetworkManager/system-connections  none   bind,nofail                      0  0
-/etc/larch-conf/cups                    /etc/cups/larch-state                   none   bind,nofail,x-systemd.mkdir      0  0
-/etc/larch-conf/nm-state                /var/lib/NetworkManager                 none   bind,nofail                      0  0
-/etc/larch-conf/bluetooth               /var/lib/bluetooth                      none   bind,nofail,x-systemd.mkdir      0  0
-/etc/larch-conf/accountsservice         /var/lib/AccountsService                none   bind,nofail                      0  0
-/etc/larch-conf/journal                 /var/log/journal                        none   bind,nofail                      0  0
-/etc/larch-conf/systemd-backlight       /var/lib/systemd/backlight              none   bind,nofail,x-systemd.mkdir      0  0
-/etc/larch-conf/systemd-rfkill          /var/lib/systemd/rfkill                 none   bind,nofail,x-systemd.mkdir      0  0
-/etc/larch-conf/systemd-timers          /var/lib/systemd/timers                 none   bind,nofail,x-systemd.mkdir      0  0
+PARTLABEL=LARCHSYS       /           squashfs  ro                                             0  0
+LABEL=LARCHCONF          /conf       ext4      defaults,relatime                              0  2
+overlay                  /etc        overlay   lowerdir=/etc,upperdir=/conf/etc,workdir=/conf/etc-work,x-systemd.requires-mounts-for=/conf  0  0
+overlay                  /var        overlay   lowerdir=/var,upperdir=/conf/var,workdir=/conf/var-work,x-systemd.requires-mounts-for=/conf  0  0
+tmpfs                    /var/tmp    tmpfs     mode=1777,nosuid,nodev,size=25%                0  0
+LABEL=LARCHHOME          /home       ext4      defaults,relatime,nofail                       0  2
+tmpfs                    /media      tmpfs     mode=0755,nosuid,nodev                         0  0

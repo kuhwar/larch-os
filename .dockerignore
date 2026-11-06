@@ -1,6 +1,7 @@
 # Don't copy build artifacts or large caches into the Docker image
 work/
 output/
+kernel-cache/
 *.iso
 *.squashfs
 *.img
