@@ -30,10 +30,11 @@ file, this section wins.
   before `packages.list`, so DKMS (nvidia, broadcom-sta) builds against their
   headers. `linux-image-amd64` / `linux-headers-amd64` are no longer in
   `packages.list`.
-- **No OS initramfs:** `initramfs/os/` is gone and stage 7 is a no-op (numbering
-  kept). `initramfs/installer/` still boots the ISO.
+- **No OS initramfs:** `initramfs/os/` is gone; the installed system boots with
+  no initramfs. `initramfs/installer/` still boots the ISO, and stage 7 now
+  builds the **updater initramfs** (`initramfs/update/` + `updater/`, see below).
 - **Disk layout (four partitions):**
-  1. `LARCHEFI` — FAT32, 512 MiB: `EFI/BOOT/BOOTX64.EFI`, `loader/`, `larch-os/vmlinuz`
+  1. `LARCHEFI` — FAT32, 512 MiB: `EFI/BOOT/BOOTX64.EFI`, `loader/`, `larch-os/vmlinuz`, `larch-os/update-initramfs.img`
   2. `LARCHSYS` — 1 GiB, `rootfs.squashfs` `dd`'d onto the partition (no
      filesystem label — matched by PARTLABEL). Mounted
      `root=PARTLABEL=LARCHSYS rootfstype=squashfs ro rootwait`.
@@ -76,7 +77,35 @@ file, this section wins.
   kept deliberately); `clean-rootfs.sh` itself drops every iwlwifi `.ucode`
   except the highest API ≤ the kernel's maximum per chip (read via `modinfo`
   from the installed iwlwifi modules, so it follows kernel upgrades).
-- **No in-place update:** `installer/lib/update.sh` is gone; every install wipes the disk.
+- **Updates: the "Update LARCH" boot entry** (`bootloader/entries/larch-update.conf`,
+  third in the menu via `sort-key`) boots LARCHEFI's kernel with
+  `larch-os/update-initramfs.img` (copied there by the installer). That
+  initramfs (stage 7, `bundle_update_modules`) carries **its own drivers**:
+  all of `drivers/net` (+ DKMS `wl`), Thunderbolt, HID/input, MMC/SDIO, USB
+  hosts, cfg80211/mac80211/rfkill, crypto, loop, FAT/NLS with their
+  `modules.dep` closure (kept `.ko.xz`, loaded by the bundled kmod, which
+  `/proc/sys/kernel/modprobe` points at), the firmware those modules declare
+  via `modinfo -F firmware`, and the image's modprobe.d. It **never reads
+  LARCHSYS**, so after an interrupted write the user just boots "Update LARCH"
+  again. `updater/lib/hw.sh` coldplugs by modalias (PCI display class
+  skipped); `updater/lib/net.sh` does wired DHCP if a cable has carrier, else a
+  Wi-Fi list via wpa_supplicant/wpa_cli with the password asked each time
+  (nothing stored); `updater/lib/release.sh` lists the last 5 GitHub releases
+  carrying `larch-os-rootfs.squashfs` + `.sha256` (API JSON parsed with awk),
+  downloads it and `larch-os-update-initramfs.img` (+ `.sha256`, published by
+  the workflow from `work/update-initramfs.img`) into a **tmpfs** (RAM; no
+  partition is used for staging), verifies both sha256s, loop-mounts the image
+  to check it's Larch OS and fits LARCHSYS, and checks the new updater has
+  `usr/lib/modules/<new kver>/`. Then it `dd`s the image over LARCHSYS (no
+  A/B) and reads it back; only after that does it touch LARCHEFI, copying the
+  image's kernel (`/usr/lib/modules/<kver>/vmlinuz`, put there by stage 6
+  because `/boot` is excluded) and the new updater beside the old ones and
+  renaming both into place — the kernel and the updater's modules must always
+  match. LARCHCONF and LARCHHOME are never mounted; loader entries
+  (machine-id/hostname args) are left alone. The installer still always
+  wipes the disk. Releases without the embedded kernel or the updater asset
+  are only accepted if their kernel is the running one. Installs from ISOs
+  without the entry need one reinstall.
 - **Known gaps:** a unit enabled at runtime (in the upper `/etc/systemd`) is
   invisible to PID 1 at boot, since it loads units before the overlay mounts;
   any `/etc` file changed at runtime hides a newer image's version (drift) —
@@ -160,7 +189,7 @@ sudo make install-deps
 | `scripts/clean-rootfs.sh`, `config/remove.list` or `config/remove-files.list` | `./docker-build.sh --stage 5` |
 | `rootfs-overlay/` or any rootfs content | `./docker-build.sh --stage 6` (squashfs rebuild) |
 | `config/squashfs.exclude` | `./docker-build.sh --stage 6` |
-| `initramfs/os/` (init or modules.list) | `./docker-build.sh --stage 7` |
+| `initramfs/update/` or `updater/` | `./docker-build.sh --stage 7` |
 | `installer/install.sh` or `initramfs/installer/` | `./docker-build.sh --stage 8` |
 | Bootloader configs only | `./docker-build.sh --stage 9` (assemble-iso only) |
 

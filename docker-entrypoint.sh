@@ -16,7 +16,8 @@
 #                             run scripts/setup-chroot.sh inside chroot
 #   5.  clean-rootfs        — strip package manager (scripts/clean-rootfs.sh)
 #   6.  make-squashfs       — compress rootfs into rootfs.squashfs (the installer writes it raw onto LARCHSYS)
-#   7.  (skipped)           — no OS initramfs: the kernel mounts LARCHSYS itself
+#   7.  build-updater       — build the updater initramfs ("Update LARCH" boot entry;
+#                             also published per release, see build-iso.yml)
 #   8.  build-installer     — build the installer initramfs (mounts ISO, runs install.sh)
 #   9.  assemble-iso        — copy all pieces into work/iso/
 #   10. make-iso            — run grub-mkrescue to produce larch-os.iso (UEFI only)
@@ -36,6 +37,7 @@ ROOTFS_DIR="$WORK_DIR/rootfs"
 SQUASHFS_FILE="$WORK_DIR/rootfs.squashfs"
 KERNEL_CACHE="$SCRIPT_DIR/kernel-cache"
 INSTALLER_INITRAMFS_FILE="$WORK_DIR/installer-initramfs.img"
+UPDATE_INITRAMFS_FILE="$WORK_DIR/update-initramfs.img"
 ISO_ROOT="$WORK_DIR/iso"
 OUTPUT_ISO="${LARCH_OUTPUT_ISO:-$SCRIPT_DIR/larch-os.iso}"
 
@@ -158,8 +160,10 @@ copy_bin_with_libs() {
 
 populate_initramfs_tree() {
     # Fill <build_dir> with the busybox userland, the kernel modules named in
-    # <src_dir>/modules.list, the init script and an empty /etc/modprobe.d.
+    # <modules_list> (default initramfs/modules.list; "none" for no modules),
+    # <src_dir>/init and an empty /etc/modprobe.d.
     local src_dir="$1" build_dir="$2" label="${3:-initramfs}"
+    local modules_list="${4:-$SCRIPT_DIR/initramfs/modules.list}"
     rm -rf "$build_dir"
     mkdir -p "$build_dir"/{bin,sbin,lib,lib64,lib/x86_64-linux-gnu,usr/bin,usr/sbin,\
 usr/lib/x86_64-linux-gnu,dev,proc,sys,mnt/squashfs,mnt/overlay,mnt/root,mnt/config,\
@@ -185,7 +189,9 @@ mnt/iso,run,tmp}
     info "[$label] Copying kernel modules"
     local kver
     kver=$(ls "$ROOTFS_DIR/lib/modules/" 2>/dev/null | sort -V | tail -1)
-    if [ -n "$kver" ]; then
+    if [ "$modules_list" = none ]; then
+        info "[$label] Kernel modules: added by the caller"
+    elif [ -n "$kver" ]; then
         mkdir -p "$build_dir/lib/modules/$kver"
         while IFS= read -r mod; do
             [[ "$mod" =~ ^#|^$ ]] && continue
@@ -193,7 +199,7 @@ mnt/iso,run,tmp}
             while IFS= read -r kofile; do
                 install -D "$kofile" "$build_dir${kofile#$ROOTFS_DIR}"
             done
-        done < "$SCRIPT_DIR/initramfs/modules.list"
+        done < "$modules_list"
 
         for f in modules.dep modules.alias modules.softdep modules.builtin; do
             [ -f "$ROOTFS_DIR/lib/modules/$kver/$f" ] && \
@@ -223,6 +229,40 @@ mnt/iso,run,tmp}
     chmod +x "$build_dir/init"
 
     mkdir -p "$build_dir/etc/modprobe.d"
+}
+
+bundle_dialog() {
+    # dialog drives the installer's and the updater's entire UI (ncurses) and
+    # is a REQUIRED component — neither has a text fallback. Fail the build here
+    # rather than ship a broken initramfs. If this trips on a cached rootfs that
+    # predates `dialog` in packages.list, rebuild from stage 4.
+    local build_dir="$1" label="$2"
+    if ! find "$ROOTFS_DIR/usr/bin" "$ROOTFS_DIR/bin" -name dialog 2>/dev/null | grep -q .; then
+        die "dialog not found in rootfs — it is required by the $label (it ships via config/packages.list; rebuild from stage 4)"
+    fi
+    copy_bin_with_libs dialog "$build_dir"
+    # ncurses needs a terminfo entry for the active $TERM. Bundle the common
+    # console/VM terminal types; the scripts set TERM=linux on the VT.
+    local ti_src="$ROOTFS_DIR/usr/share/terminfo"
+    [ -d "$ti_src" ] || die "terminfo not found in rootfs — required for the $label's dialog UI"
+    local _ent
+    for _ent in l/linux v/vt100 v/vt220 a/ansi x/xterm x/xterm-256color d/dumb; do
+        [ -f "$ti_src/$_ent" ] && \
+            install -D "$ti_src/$_ent" "$build_dir/usr/share/terminfo/$_ent"
+    done
+    [ -f "$build_dir/usr/share/terminfo/l/linux" ] \
+        || die "terminfo entry for TERM=linux not found in rootfs — required for the $label's dialog UI"
+    info "[$label] Bundled dialog + terminfo (full-screen UI)"
+}
+
+pack_initramfs() {
+    # Pack <build_dir> as a single gzip cpio at <out>.
+    local build_dir="$1" out="$2" label="$3"
+    info "[$label] Packing → $out"
+    rm -f "$out"
+    (cd "$build_dir" && find . | cpio --create --format=newc --quiet) | \
+        gzip -9 > "$out"
+    info "[$label] Done: $(basename "$out") ($(du -sh "$out" | cut -f1))"
 }
 
 build_installer_initramfs() {
@@ -280,35 +320,111 @@ build_installer_initramfs() {
         info "WARNING: ossl-modules directory not found in rootfs — openssl passwd may fail"
     fi
 
-    # dialog drives the installer's entire UI (ncurses) and is a REQUIRED
-    # component — install.sh has no text fallback and dies without it. Fail the
-    # build here rather than ship a broken installer. If this trips on a cached
-    # rootfs that predates `dialog` in packages.list, rebuild from stage 4.
-    if ! find "$ROOTFS_DIR/usr/bin" "$ROOTFS_DIR/bin" -name dialog 2>/dev/null | grep -q .; then
-        die "dialog not found in rootfs — it is required by the installer (it ships via config/packages.list; rebuild from stage 4)"
-    fi
-    copy_bin_with_libs dialog "$build_dir"
-    # ncurses needs a terminfo entry for the active $TERM. Bundle the common
-    # console/VM terminal types; install.sh sets TERM=linux on the VT.
-    local ti_src="$ROOTFS_DIR/usr/share/terminfo"
-    [ -d "$ti_src" ] || die "terminfo not found in rootfs — required for the installer's dialog UI"
-    local _ent
-    for _ent in l/linux v/vt100 v/vt220 a/ansi x/xterm x/xterm-256color d/dumb; do
-        [ -f "$ti_src/$_ent" ] && \
-            install -D "$ti_src/$_ent" "$build_dir/usr/share/terminfo/$_ent"
-    done
-    [ -f "$build_dir/usr/share/terminfo/l/linux" ] \
-        || die "terminfo entry for TERM=linux not found in rootfs — required for the installer's dialog UI"
-    info "[installer] Bundled dialog + terminfo (full-screen installer UI)"
+    bundle_dialog "$build_dir" installer
 
-    # Pack as single gzip cpio (no squashfs — no two-pass needed)
-    info "[installer] Packing installer initramfs → $INSTALLER_INITRAMFS_FILE"
-    rm -f "$INSTALLER_INITRAMFS_FILE"
-    (cd "$build_dir" && find . | cpio --create --format=newc --quiet) | \
-        gzip -9 > "$INSTALLER_INITRAMFS_FILE"
-    local sz
-    sz=$(du -sh "$INSTALLER_INITRAMFS_FILE" | cut -f1)
-    info "[installer] Done: installer-initramfs.img ($sz)"
+    pack_initramfs "$build_dir" "$INSTALLER_INITRAMFS_FILE" installer
+}
+
+bundle_update_modules() {
+    # The updater's own drivers: every network driver (Ethernet, USB Ethernet,
+    # Wi-Fi incl. the DKMS-built Broadcom wl, Thunderbolt networking), plus
+    # what it takes to use them and the console — HID/input, SDIO/MMC hosts,
+    # USB host controllers, cfg80211/mac80211/rfkill, crypto (WPA2/3), loop
+    # and FAT/NLS — with all their dependencies (modules.dep lists them
+    # transitively), and the firmware those modules declare. Modules stay
+    # compressed: the bundled kmod loads .ko.xz itself. The updater never
+    # reads LARCHSYS for drivers, so it works with a half-written LARCHSYS.
+    local build_dir="$1"
+    local kver; kver=$(ls "$ROOTFS_DIR/lib/modules/" | sort -V | tail -1)
+    local src="$ROOTFS_DIR/usr/lib/modules/$kver"
+    local dst="$build_dir/usr/lib/modules/$kver"
+    [ -f "$src/modules.dep" ] || die "modules.dep not found for kernel $kver"
+    local list="$WORK_DIR/update-modules.list" fwlist="$WORK_DIR/update-firmware.list"
+
+    awk -F': *' '
+        $1 ~ /^kernel\/(drivers\/(net|hid|input|mmc|usb\/host|thunderbolt|bcma|ssb)|net\/(wireless|mac80211|rfkill|packet)|crypto|arch\/x86\/crypto|lib|fs\/(fat|nls))\// \
+            || $1 ~ /^kernel\/drivers\/block\/loop\.ko/ || $1 ~ /^updates\/(.*\/)?wl\.ko/ {
+            print $1
+            n = split($2, d, " "); for (i = 1; i <= n; i++) print d[i]
+        }' "$src/modules.dep" | sort -u > "$list"
+
+    local rel
+    while IFS= read -r rel; do
+        install -D -m 644 "$src/$rel" "$dst/$rel"
+    done < "$list"
+    # The indexes cover modules not bundled too; loading one of those just fails.
+    cp "$src"/modules.* "$dst/"
+    ln -sfn ../usr/lib/modules "$build_dir/lib/modules"
+    info "[updater] $(wc -l < "$list") modules ($(du -sh "$dst" | cut -f1))"
+
+    # Firmware the bundled modules declare (MODULE_FIRMWARE), as present in
+    # the rootfs (some names are globs; compressed variants count), plus what
+    # cfg80211/brcmfmac load without declaring it.
+    sed "s|^|/usr/lib/modules/$kver/|" "$list" \
+        | chroot "$ROOTFS_DIR" xargs -r modinfo -F firmware 2>/dev/null \
+        | sort -u > "$fwlist" || true
+    printf '%s\n' 'regulatory.db*' 'brcm/*.txt*' 'brcm/*.clm_blob*' 'brcm/*.txcap_blob*' >> "$fwlist"
+    local fwsrc="$ROOTFS_DIR/usr/lib/firmware" fw f
+    while IFS= read -r fw; do
+        [ -n "$fw" ] || continue
+        # Unquoted on purpose: expands the glob names.
+        for f in "$fwsrc"/$fw "$fwsrc"/$fw.xz "$fwsrc"/$fw.zst; do
+            [ -e "$f" ] || continue
+            install -D -m 644 "$f" "$build_dir/usr/lib/firmware/${f#"$fwsrc"/}"
+        done
+    done < "$fwlist"
+    mkdir -p "$build_dir/usr/lib/firmware"
+    ln -sfn ../usr/lib/firmware "$build_dir/lib/firmware"
+    info "[updater] firmware: $(find "$build_dir/usr/lib/firmware" -type f | wc -l) files ($(du -sh "$build_dir/usr/lib/firmware" | cut -f1))"
+
+    # The image's module config (e.g. broadcom-sta's blacklist of b43/bcma).
+    mkdir -p "$build_dir/etc/modprobe.d" "$build_dir/usr/lib/modprobe.d"
+    cp -a "$ROOTFS_DIR/etc/modprobe.d/." "$build_dir/etc/modprobe.d/" 2>/dev/null || true
+    cp -a "$ROOTFS_DIR/usr/lib/modprobe.d/." "$build_dir/usr/lib/modprobe.d/" 2>/dev/null || true
+    ln -sfn ../usr/lib/modprobe.d "$build_dir/lib/modprobe.d"
+}
+
+build_update_initramfs() {
+    # The "Update LARCH" boot entry's initramfs: busybox, the updater scripts,
+    # the network/UI tools and its own drivers + firmware (bundle_update_modules).
+    # Built for the kernel in this rootfs, so it is published per release
+    # (larch-os-update-initramfs.img) and the updater installs it with the
+    # release's kernel.
+    local src_dir="$SCRIPT_DIR/initramfs/update"
+    local build_dir="$WORK_DIR/update-initramfs-build"
+
+    populate_initramfs_tree "$src_dir" "$build_dir" "updater" none
+    # The scripts lean on busybox's standalone shell for these applets.
+    local _applet _applets
+    _applets=$("$build_dir/bin/busybox" --list)
+    for _applet in udhcpc ip ifconfig sha256sum stat xargs setsid cttyhack readlink zcat cpio; do
+        printf '%s\n' "$_applets" | grep -qx "$_applet" \
+            || die "busybox in the rootfs lacks the '$_applet' applet the updater needs"
+    done
+    rm -rf "$build_dir/lib/modules" "$build_dir/etc/modprobe.d"
+    bundle_update_modules "$build_dir"
+
+    install -m 755 "$SCRIPT_DIR/updater/update.sh" "$build_dir/usr/sbin/larch-update"
+    for _lib in "$SCRIPT_DIR/updater/lib/"*.sh; do
+        install -D -m 644 "$_lib" "$build_dir/usr/lib/larch-update/$(basename "$_lib")"
+    done
+    install -D -m 755 "$src_dir/udhcpc.script" "$build_dir/usr/share/udhcpc/default.script"
+
+    # curl (GitHub API + download), wpa_supplicant/wpa_cli (Wi-Fi), and kmod's
+    # modprobe: the image's modules are .ko.xz, which busybox can't load.
+    info "[updater] Copying tool binaries from larch OS rootfs"
+    for bin in curl wpa_supplicant wpa_cli modprobe; do
+        copy_bin_with_libs "$bin" "$build_dir"
+    done
+    install -D -m 644 "$ROOTFS_DIR/etc/ssl/certs/ca-certificates.crt" \
+        "$build_dir/etc/ssl/certs/ca-certificates.crt"
+    printf 'hosts: files dns\n' > "$build_dir/etc/nsswitch.conf"
+    printf '127.0.0.1\tlocalhost\n::1\tlocalhost\n' > "$build_dir/etc/hosts"
+    printf 'root:x:0:0:root:/root:/bin/sh\n' > "$build_dir/etc/passwd"
+    printf 'root:x:0:\n' > "$build_dir/etc/group"
+
+    bundle_dialog "$build_dir" updater
+    pack_initramfs "$build_dir" "$UPDATE_INITRAMFS_FILE" updater
 }
 
 find_vmlinuz() {
@@ -458,6 +574,15 @@ run_stage 6 "make-squashfs — compress rootfs into squashfs image" && {
     : > "$ROOTFS_DIR/etc/machine-id"
     ln -sfn /etc/machine-id "$ROOTFS_DIR/var/lib/dbus/machine-id"
 
+    # The image carries its own kernel beside its modules (/boot is excluded),
+    # so the updater can install the kernel that matches the new root's
+    # modules onto LARCHEFI along with it.
+    VMLINUZ="$(find_vmlinuz)"
+    [ -f "$VMLINUZ" ] || die "Kernel vmlinuz not found in rootfs/boot"
+    kver=$(ls "$ROOTFS_DIR/lib/modules/" | sort -V | tail -1)
+    install -m 644 "$VMLINUZ" "$ROOTFS_DIR/usr/lib/modules/$kver/vmlinuz"
+    info "Kernel $kver → /usr/lib/modules/$kver/vmlinuz"
+
     info "Creating squashfs (zstd compression)"
     rm -f "$SQUASHFS_FILE"
     # config/squashfs.exclude: build leftovers and /boot (see the file).
@@ -472,13 +597,14 @@ run_stage 6 "make-squashfs — compress rootfs into squashfs image" && {
     info "Squashfs created: $SQUASHFS_FILE ($sz)"
 }
 
-# ── Stage 7: (no OS initramfs) ───────────────────────────────────────────────
-# The installed system boots without an initramfs: the kernel has the ext4 and
-# disk drivers built in (larch-kernel repo, scripts/fetch-kernel.sh) and mounts
-# root=PARTLABEL=LARCHSYS read-only itself. The stage number is kept so the
-# later stages keep their numbers.
-run_stage 7 "build-os-initramfs — skipped, the installed system has no initramfs" && {
-    info "Nothing to do"
+# ── Stage 7: build-updater ───────────────────────────────────────────────────
+# (The installed system itself boots without an initramfs: the kernel mounts
+# root=PARTLABEL=LARCHSYS read-only. This initramfs is only for the
+# "Update LARCH" boot entry.)
+run_stage 7 "build-updater — build the updater initramfs" && {
+    [ -d "$ROOTFS_DIR/usr" ] || \
+        die "Larch OS rootfs not found — run stages 2-5 first (stage 7 copies tools from it)"
+    build_update_initramfs
 }
 
 # ── Stage 8: build-installer ─────────────────────────────────────────────────
@@ -518,6 +644,11 @@ run_stage 9 "assemble-iso — copy all files into ISO tree" && {
         die "rootfs.squashfs not found — run stage 6 first"
     cp "$SQUASHFS_FILE"     "$ISO_ROOT/larch-os/rootfs.squashfs"
     cp "$VMLINUZ"           "$ISO_ROOT/larch-os/vmlinuz"
+    # Updater initramfs — the installer copies it to LARCHEFI for the
+    # "Update LARCH" boot entry
+    [ -f "$UPDATE_INITRAMFS_FILE" ] || \
+        die "Updater initramfs not found — run stage 7 first"
+    cp "$UPDATE_INITRAMFS_FILE" "$ISO_ROOT/larch-os/update-initramfs.img"
 
     # Bootloader files for the installed disk — installer copies these to LARCHEFI
     EFI_BIN="$(find_efi_bin)"
@@ -526,9 +657,11 @@ run_stage 9 "assemble-iso — copy all files into ISO tree" && {
     cp "$SCRIPT_DIR/bootloader/loader.conf"              "$ISO_ROOT/loader/loader.conf"
     cp "$SCRIPT_DIR/bootloader/entries/larch.conf"       "$ISO_ROOT/loader/entries/larch.conf"
     # Second, non-default entry: verbose console logging for diagnosing boot
-    # failures (quiet/splash and the systemd/udev status suppressors are dropped). Not the default — the
-    # menu stays hidden behind timeout 0; hold a key (Space) at power-on to pick.
+    # failures (quiet/splash and the systemd/udev status suppressors are dropped).
+    # The menu shows for loader.conf's timeout; sort-key orders the entries.
     cp "$SCRIPT_DIR/bootloader/entries/larch-debug.conf" "$ISO_ROOT/loader/entries/larch-debug.conf"
+    # Third entry: boot the updater (download a release, rewrite LARCHSYS).
+    cp "$SCRIPT_DIR/bootloader/entries/larch-update.conf" "$ISO_ROOT/loader/entries/larch-update.conf"
 
     # /etc/skel — seeded into home partition at install time
     cp -a "$ROOTFS_DIR/etc/skel/." "$ISO_ROOT/skel/" 2>/dev/null || true

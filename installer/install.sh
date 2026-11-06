@@ -6,6 +6,7 @@
 # OS files to be installed are available there:
 #   /mnt/iso/larch-os/rootfs.squashfs  — OS root filesystem (written raw onto LARCHSYS)
 #   /mnt/iso/larch-os/vmlinuz          — kernel (root-mount drivers built in)
+#   /mnt/iso/larch-os/update-initramfs.img — updater ("Update LARCH" boot entry)
 #   /mnt/iso/EFI/BOOT/BOOTX64.EFI     — systemd-boot
 #   /mnt/iso/loader/                   — bootloader config
 #
@@ -13,8 +14,9 @@
 # hostname as <username>-<brand>-<device type>) and the target disk, then wipes
 # it and creates four partitions:
 #
-#   1. LARCHEFI  (FAT32) — systemd-boot, loader config, vmlinuz. No initramfs:
-#                          the kernel mounts LARCHSYS itself. The loader entries
+#   1. LARCHEFI  (FAT32) — systemd-boot, loader config, vmlinuz, and the
+#                          updater's initramfs. The system itself boots with no
+#                          initramfs: the kernel mounts LARCHSYS itself. The loader entries
 #                          carry this machine's id and hostname
 #                          (systemd.machine_id=, systemd.hostname=).
 #   2. LARCHSYS  (squashfs) — rootfs.squashfs written byte-for-byte onto the
@@ -26,7 +28,8 @@
 #                          of the overlay on /var.
 #   4. LARCHHOME (ext4)  — /home/<username>, seeded from /etc/skel.
 #
-# There is no in-place update on this layout yet: every run is a clean install.
+# Every run is a clean install. Updates are done by the "Update LARCH" boot
+# entry (updater/update.sh), which rewrites LARCHSYS from a GitHub release.
 
 set -e
 
@@ -52,6 +55,7 @@ done
 
 [ -f "$ISO_MOUNT/larch-os/rootfs.squashfs" ] || die "rootfs.squashfs not found on installer medium ($ISO_MOUNT/larch-os/rootfs.squashfs)"
 [ -f "$ISO_MOUNT/larch-os/vmlinuz" ]         || die "Kernel not found on installer medium"
+[ -f "$ISO_MOUNT/larch-os/update-initramfs.img" ] || die "Updater initramfs not found on installer medium"
 [ -f "$ISO_MOUNT/EFI/BOOT/BOOTX64.EFI" ]    || die "EFI binary not found on installer medium"
 [ -d "$ISO_MOUNT/loader" ]                   || die "Bootloader config not found on installer medium"
 
@@ -213,6 +217,7 @@ cp -r "$ISO_MOUNT/loader" "$MOUNT_EFI/"
 sed -i "s/^options .*/& systemd.machine_id=$MACHINE_ID systemd.hostname=$LARCH_HOSTNAME/" \
     "$MOUNT_EFI"/loader/entries/*.conf
 cp "$ISO_MOUNT/larch-os/vmlinuz" "$MOUNT_EFI/larch-os/vmlinuz"
+cp "$ISO_MOUNT/larch-os/update-initramfs.img" "$MOUNT_EFI/larch-os/update-initramfs.img"
 
 sync
 umount "$MOUNT_EFI"
