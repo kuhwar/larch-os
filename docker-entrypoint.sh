@@ -515,13 +515,38 @@ run_stage 3 "copy-overlay — merge rootfs-overlay into rootfs" && {
     fi
 }
 
-# ── Stage 4: chroot-configure ────────────────────────────────────────────────
-run_stage 4 "chroot-configure — install packages and configure system" && {
+# ── chroot pseudo-filesystems (stages 4 and 5) ───────────────────────────────
+mount_chroot_pseudofs() {
     info "Mounting proc/sys/dev inside chroot"
     mount --bind /proc "$ROOTFS_DIR/proc"
     mount --bind /sys  "$ROOTFS_DIR/sys"
-    mount --bind /dev  "$ROOTFS_DIR/dev"
-    mount --bind /dev/pts "$ROOTFS_DIR/dev/pts"
+    # /dev must be bound recursively. Rootless Podman can't mknod, so the
+    # container's /dev is a tmpfs of empty placeholder files with each device
+    # node (null, zero, urandom, pts, …) bind-mounted over its placeholder. A
+    # plain --bind skips those submounts: the chroot then sees /dev/null as a
+    # regular, writable file, every `>/dev/null` appends to it, and every
+    # `cat … /dev/null` replays the junk (this broke the NVIDIA DKMS conftest).
+    # rslave keeps the recursive unmount below from propagating back.
+    mount --rbind /dev "$ROOTFS_DIR/dev"
+    mount --make-rslave "$ROOTFS_DIR/dev"
+}
+
+umount_chroot_pseudofs() {
+    info "Unmounting pseudo-filesystems"
+    umount -Rl "$ROOTFS_DIR/dev"  2>/dev/null || true
+    umount -lf "$ROOTFS_DIR/sys"  2>/dev/null || true
+    umount -lf "$ROOTFS_DIR/proc" 2>/dev/null || true
+    # Under rootless Podman, debootstrap leaves the rootfs's own /dev/null as a
+    # regular file (no mknod). Empty it so nothing written there by an earlier
+    # build ships in the squashfs (devtmpfs hides it at runtime anyway).
+    if [ -f "$ROOTFS_DIR/dev/null" ] && [ ! -L "$ROOTFS_DIR/dev/null" ]; then
+        : > "$ROOTFS_DIR/dev/null"
+    fi
+}
+
+# ── Stage 4: chroot-configure ────────────────────────────────────────────────
+run_stage 4 "chroot-configure — install packages and configure system" && {
+    mount_chroot_pseudofs
 
     # The image's resolv.conf is a symlink into /run (set below); replace it
     # with the builder's for apt, without following the link.
@@ -548,21 +573,21 @@ run_stage 4 "chroot-configure — install packages and configure system" && {
     rm -f "$ROOTFS_DIR/etc/resolv.conf"
     ln -s ../run/NetworkManager/resolv.conf "$ROOTFS_DIR/etc/resolv.conf"
 
-    info "Unmounting pseudo-filesystems"
-    umount -lf "$ROOTFS_DIR/dev/pts" 2>/dev/null || true
-    umount -lf "$ROOTFS_DIR/dev"     2>/dev/null || true
-    umount -lf "$ROOTFS_DIR/sys"     2>/dev/null || true
-    umount -lf "$ROOTFS_DIR/proc"    2>/dev/null || true
+    umount_chroot_pseudofs
 }
 
 # ── Stage 5: clean-rootfs ─────────────────────────────────────────────────────
 run_stage 5 "clean-rootfs — strip package manager and build artifacts" && {
+    mount_chroot_pseudofs
+
     info "Running rootfs cleanup (removing apt/dpkg)"
     chroot_run_with_deps \
         "$SCRIPT_DIR/scripts/clean-rootfs.sh" \
         "$SCRIPT_DIR/config/remove.list" \
         "$SCRIPT_DIR/config/remove-files.list"
     info "Rootfs is now package-manager-free"
+
+    umount_chroot_pseudofs
 }
 
 # ── Stage 6: make-squashfs ────────────────────────────────────────────────────
