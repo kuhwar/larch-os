@@ -57,26 +57,8 @@ docker-shell: ## Open a shell inside the builder container
 
 ## ── Testing ──────────────────────────────────────────────────────────────────
 
-# One target for install and boot: the disk is first in the boot order, so a
-# blank disk falls through to the ISO (installer) and an installed one boots
-# the system. Delete work/test-disk.img to test a fresh install again.
+# The logic lives in ./test-qemu.sh so it also runs without make (e.g. on
+# larch-os itself, using a QEMU AppImage from ~/Applications).
 .PHONY: test-qemu
 test-qemu: ## Boot ISO + 20G test disk in QEMU (UEFI); installs if the disk is blank, else boots it
-	@[ -f "$(OUTPUT)" ] || { echo "Run 'make iso' first"; exit 1; }
-	@[ -f work/test-disk.img ] || \
-	    qemu-img create -f qcow2 work/test-disk.img 20G
-	qemu-system-x86_64 \
-	    -enable-kvm \
-	    -m 4G \
-	    -cpu host \
-	    -smp 2 \
-	    -bios /usr/share/ovmf/OVMF.fd \
-	    -drive file=work/test-disk.img,format=qcow2,if=none,id=disk \
-	    -device virtio-blk-pci,drive=disk,bootindex=0 \
-	    -drive file=$(OUTPUT),media=cdrom,readonly=on,if=none,id=cd \
-	    -device ide-cd,drive=cd,bootindex=1 \
-	    -vga virtio \
-	    -display gtk,gl=off \
-	    -full-screen \
-	    -device virtio-net,netdev=net0 \
-	    -netdev user,id=net0
+	./test-qemu.sh

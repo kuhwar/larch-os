@@ -196,8 +196,14 @@ sudo make install-deps
 ### Test in QEMU
 
 ```bash
-make test-qemu               # ISO + 20G qcow2 disk, full screen; installs if the disk is blank, else boots it
-                             # (rm work/test-disk.img to reinstall; requires ovmf + qemu-system-x86)
+./test-qemu.sh               # ISO + 20G qcow2 disk, full screen, UEFI; installs if the disk is blank, else boots it
+                             # (rm work/test-disk.img to reinstall). `make test-qemu` is a wrapper for it.
+                             # Uses host qemu-system-x86 + qemu-utils + ovmf, or — when there is no package
+                             # manager (e.g. on larch-os itself) — a QEMU AppImage: $QEMU_APPIMAGE,
+                             # a qemu-system-x86_64 symlinked to one, or ~/Applications/*QEMU*.AppImage.
+                             # With the AppImage, edk2's bundled UEFI code is copied to work/ and mapped as
+                             # pflash (it can't be loaded with -bios), with a blank work/edk2-x86_64-vars.fd.
+                             # Extra args are passed through to qemu-system-x86_64.
 ```
 
 ## Architecture
