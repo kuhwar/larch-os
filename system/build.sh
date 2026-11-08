@@ -228,6 +228,7 @@ run_stage 6 "make-squashfs — one sys-<desktop>.squashfs per desktop" && {
         : > "$root/etc/machine-id"
         ln -sfn /etc/machine-id "$root/var/lib/dbus/machine-id"
         # What the image is: shown by the updater, checked by release.sh.
+        mkdir -p "$root/usr/lib/larch"
         printf '%s\n' "$LARCH_VERSION" > "$root/usr/lib/larch/version"
         printf '%s\n' "$de" > "$root/usr/lib/larch/desktop"
         out="$OUT_DIR/sys-$de.squashfs"
