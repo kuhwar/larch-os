@@ -17,7 +17,7 @@ human_size() {
 
 # Is this partition a larch-os EFI partition? The installer formats LARCHEFI as
 # FAT32 with `mkfs.fat -n LARCHEFI`, which writes the 11-byte volume label into the
-# boot sector at offset 71 (FAT BS_VolLab). busybox has no `blkid`, so read it raw
+# boot sector at offset 71 (FAT BS_VolLab). busybox-static has no `blkid`, so read it raw
 # with dd — this needs no mount and works per-partition (findfs only resolves a
 # label to a single device, so it can't tell which disk owns it).
 part_is_larchefi() {
@@ -28,10 +28,16 @@ part_is_larchefi() {
 
 # Disks (sysfs names) holding the installer medium (ISO9660 label LARCHISO, on
 # the whole disk or, as the kernel sees grub-mkrescue's hybrid layout, a
-# partition of it). They are left out of the target list.
+# partition of it). They are left out of the target list. busybox-static has no
+# blkid, so read the label raw: the ISO9660 primary volume descriptor is at
+# byte 32768 and its 32-byte volume identifier at offset 40 within it.
 installer_disks() {
-    blkid 2>/dev/null | sed -n 's|^/dev/\([^:]*\):.*LABEL="LARCHISO".*|\1|p' | while read -r _n; do
-        if [ -f "/sys/class/block/$_n/partition" ]; then parent_disk "$_n"; else echo "$_n"; fi
+    for _d in /sys/class/block/*; do
+        _n=$(basename "$_d")
+        [ -b "/dev/$_n" ] || continue
+        _lbl=$(dd if="/dev/$_n" bs=1 skip=32808 count=32 2>/dev/null | tr -d ' \000')
+        [ "$_lbl" = "LARCHISO" ] || continue
+        if [ -f "$_d/partition" ]; then parent_disk "$_n"; else echo "$_n"; fi
     done | sort -u
 }
 

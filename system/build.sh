@@ -132,7 +132,8 @@ desktop_root() { echo "$DESKTOPS_WORK/$1"; }
 
 # A list file for clean-rootfs.sh: the base list plus the desktop's own.
 merged_list() {
-    local name="$1" de="$2" out="$WORK_DIR/$de.$name"
+    local name="$1" de="$2"
+    local out="$WORK_DIR/$de.$name"
     cat "$SYSTEM_DIR/config/$name" > "$out"
     [ -f "$SYSTEM_DIR/desktops/$de/$name" ] && cat "$SYSTEM_DIR/desktops/$de/$name" >> "$out"
     echo "$out:$name"
