@@ -23,7 +23,8 @@
 #      name), hostname, machine-id, network connections, Bluetooth pairings,
 #      printers, time zone, language/avatar, journal (shared/lib/conf.sh).
 #   6. Swap everything in: sys.squashfs by an ext4 rename on LARCHSYS, the
-#      kernel, sys.initramfs, updater.initramfs, systemd-boot and its entries
+#      kernel, sys.initramfs, updater.initramfs, systemd-boot (BOOTX64.EFI) and
+#      its entries (loader.tar)
 #      on LARCHEFI (each copied beside the old file, then renamed), and on a
 #      switch the new layers on LARCHCONF. Until step 6 the installed system
 #      is untouched.

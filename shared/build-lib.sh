@@ -125,7 +125,7 @@ init_initramfs_tree() {
         [ "$applet" = busybox ] || ln -sf busybox "$build_dir/bin/$applet"
     done
     for applet in udhcpc ip sha256sum stat xargs setsid cttyhack readlink zcat cpio \
-                  switch_root mount dd; do
+                  switch_root mount dd tar; do
         [ -e "$build_dir/bin/$applet" ] \
             || die "busybox in the rootfs lacks the '$applet' applet the initramfs scripts need"
     done

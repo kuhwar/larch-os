@@ -9,12 +9,14 @@
 #   vmlinuz                 Debian's kernel          → LARCHEFI:/larch-os/vmlinuz
 #   sys.initramfs           boots the system         → LARCHEFI:/larch-os/sys.initramfs
 #   updater.initramfs       the "Update LARCH" entry → LARCHEFI:/larch-os/updater.initramfs
+#   BOOTX64.EFI             systemd-boot             → LARCHEFI:/EFI/BOOT/BOOTX64.EFI
+#   loader.tar              loader/loader.conf + loader/entries/*.conf → LARCHEFI:/loader/
 #   SHA256SUMS              sha256sum of all of them
 #
 # Each (release, desktop) pair is offered as "larch-<desktop>-<tag>", e.g.
-# larch-gnome-v0.1.5. The bootloader (systemd-boot) and its loader entries ship
-# inside every image (/usr/lib/systemd/boot/efi, /usr/lib/larch/boot), so they
-# always match the system they boot.
+# larch-gnome-v0.1.5. The bootloader and its entries are release files of
+# their own (not inside the images, which stay lean), shared by every desktop
+# of the release, so they always match the kernel and initramfs they boot.
 #
 # For testing, a plain HTTP directory holding those files can stand in for
 # GitHub: larch.source=<url> on the kernel command line, or the QEMU fw_cfg
@@ -30,6 +32,8 @@ SUMS=SHA256SUMS
 KERNEL=vmlinuz
 SYS_INITRD=sys.initramfs
 UPD_INITRD=updater.initramfs
+BOOT_EFI=BOOTX64.EFI
+LOADER=loader.tar
 SYS_IMG=""              # sys-<desktop>.squashfs of the chosen entry
 
 NEW_MNT="$RUN/new"      # a downloaded image, loop-mounted for checks
@@ -44,10 +48,13 @@ local_source() {
 }
 
 # Write one line per (release, desktop) to $RUN/releases:
-#   <name> <tag> <desktop> <date> <prerelease> <img> <kernel> <sys-initrd> <upd-initrd>
+#   <name> <tag> <desktop> <date> <prerelease> <img> <kernel> <sys-initrd>
+#   <upd-initrd> <efi> <loader>
 # (tab-separated, sizes in bytes; name = larch-<desktop>-<tag>) for the newest
 # $RELEASES_SHOWN published releases that carry the kernel, both initramfs,
-# SHA256SUMS and at least one sys-<desktop>.squashfs. No jq in the initramfs:
+# the bootloader, its entries, SHA256SUMS and at least one
+# sys-<desktop>.squashfs (so releases up to v0.5.1, which kept the bootloader
+# inside the image, are not offered). No jq in the initramfs:
 # the API's JSON is split at each release's own "url":".../releases/<id>"
 # (assets' urls are .../releases/assets/<id>, and quotes inside release notes
 # are escaped, so neither matches).
@@ -57,7 +64,7 @@ list_releases() {
         fetch -o "$RUN/local.sums" "$LOCAL_SOURCE/$SUMS" || return 1
         sed -n 's/^[0-9a-f]*  *\*\{0,1\}sys-\([a-z0-9]*\)\.squashfs$/\1/p' "$RUN/local.sums" | sort \
             | while read -r _de; do
-                printf 'larch-%s-local\tlocal\t%s\t%s\t0\t0\t0\t0\t0\n' "$_de" "$_de" "$LOCAL_SOURCE"
+                printf 'larch-%s-local\tlocal\t%s\t%s\t0\t0\t0\t0\t0\t0\t0\n' "$_de" "$_de" "$LOCAL_SOURCE"
             done > "$RUN/releases"
         return 0
     fi
@@ -65,7 +72,7 @@ list_releases() {
         "https://api.github.com/repos/$REPO/releases?per_page=30" -o "$RUN/releases.json" \
         || return 1
     awk -v max="$RELEASES_SHOWN" -v sums="$SUMS" -v k="$KERNEL" \
-        -v si="$SYS_INITRD" -v ui="$UPD_INITRD" '
+        -v si="$SYS_INITRD" -v ui="$UPD_INITRD" -v be="$BOOT_EFI" -v bl="$LOADER" '
         function field(s, key,   m) {
             if (!match(s, "\"" key "\" *: *\"[^\"]*\"")) return ""
             m = substr(s, RSTART, RLENGTH)
@@ -88,7 +95,8 @@ list_releases() {
             for (i = 2; i <= n && c < max; i++) {
                 r = rel[i]
                 if (r ~ /"draft":true/) continue
-                if (!has(r, sums) || !asize(r, k) || !asize(r, si) || !asize(r, ui)) continue
+                if (!has(r, sums) || !asize(r, k) || !asize(r, si) || !asize(r, ui) \
+                    || !asize(r, be) || !asize(r, bl)) continue
                 tag = field(r, "tag_name"); if (tag == "") continue
                 pre = (r ~ /"prerelease":true/) ? 1 : 0
                 date = substr(field(r, "published_at"), 1, 10)
@@ -107,7 +115,8 @@ list_releases() {
                     d = des[x]; img = asize(r, "sys-" d ".squashfs")
                     if (img) {
                         print "larch-" d "-" tag "\t" tag "\t" d "\t" date "\t" pre "\t" \
-                              img "\t" asize(r, k) "\t" asize(r, si) "\t" asize(r, ui)
+                              img "\t" asize(r, k) "\t" asize(r, si) "\t" asize(r, ui) "\t" \
+                              asize(r, be) "\t" asize(r, bl)
                         got = 1
                     }
                 }
@@ -133,7 +142,7 @@ lookup_releases() {
 }
 
 # select_release <name>: REL_NAME, REL_TAG, REL_DESKTOP, REL_DATE, SYS_IMG,
-# REL_IMG_SIZE, REL_BOOT_SIZE (kernel + both initramfs) and REL_SIZE
+# REL_IMG_SIZE, REL_BOOT_SIZE (kernel, both initramfs, bootloader, entries) and REL_SIZE
 # (everything) from $RUN/releases.
 select_release() {
     _line=$(awk -F'\t' -v n="$1" '$1 == n { print; exit }' "$RUN/releases")
@@ -143,7 +152,7 @@ select_release() {
     REL_DESKTOP=$(echo "$_line" | cut -f3)
     REL_DATE=$(echo "$_line" | cut -f4)
     REL_IMG_SIZE=$(echo "$_line" | cut -f6)
-    REL_BOOT_SIZE=$(( $(echo "$_line" | cut -f7) + $(echo "$_line" | cut -f8) + $(echo "$_line" | cut -f9) ))
+    REL_BOOT_SIZE=$(echo "$_line" | awk -F'\t' '{ print $7 + $8 + $9 + $10 + $11 }')
     REL_SIZE=$(( REL_IMG_SIZE + REL_BOOT_SIZE ))
     SYS_IMG="sys-$REL_DESKTOP.squashfs"
 }
@@ -168,11 +177,11 @@ choose_release() {
     _n=$(wc -l < "$RUN/releases")
     _h=$_n; [ "$_h" -le 12 ] || _h=12
     set --
-    while IFS="$TAB" read -r _name _tag _de _date _pre _img _k _si _ui; do
+    while IFS="$TAB" read -r _name _tag _de _date _pre _img _k _si _ui _be _bl; do
         if [ "$_tag" = local ]; then
             _d="local build"
         else
-            _d="$_date   $(( (_img + _k + _si + _ui) / 1048576 )) MB"
+            _d="$_date   $(( (_img + _k + _si + _ui + _be + _bl) / 1048576 )) MB"
         fi
         [ "$_pre" = 1 ] && _d="$_d   pre-release"
         [ "$_name" = "$_installed" ] && _d="$_d   (installed)"
@@ -231,6 +240,8 @@ download_release() {
     get_asset "$KERNEL"     "$1" "$(_sz 7)" "the kernel"         || return 1
     get_asset "$SYS_INITRD" "$1" "$(_sz 8)" "the boot initramfs" || return 1
     get_asset "$UPD_INITRD" "$1" "$(_sz 9)" "the updater"        || return 1
+    get_asset "$BOOT_EFI"   "$1" "$(_sz 10)" "the bootloader"    || return 1
+    get_asset "$LOADER"     "$1" "$(_sz 11)" "the boot entries"  || return 1
 }
 
 # The kernel an initramfs carries modules for.
@@ -241,14 +252,32 @@ initrd_kver() {
 
 # check_release <dir>: the downloaded files form a working Larch OS — the
 # image is a Larch OS root, and both initramfs and the image's modules are for
-# the same kernel (the release's vmlinuz). Copies the image's bootloader and
-# loader entries to <dir>/boot/. Sets NEW_KVER and NEW_VERSION. Leaves the
-# image mounted at $NEW_MNT for the caller (umount it when done).
+# the same kernel (the release's vmlinuz). Lays the bootloader and the loader
+# entries out under <dir>/boot/ as they go on LARCHEFI (install_boot_files).
+# Sets NEW_KVER and NEW_VERSION. Leaves the image mounted at $NEW_MNT for the
+# caller (umount it when done).
 check_release() {
     msg "Check" "Checking the downloaded release..."
     if [ "$(head -c 4 "$1/$SYS_IMG")" != hsqs ]; then
         note "Check" "  $SYS_IMG is not a squashfs image."; return 1
     fi
+    if [ "$(head -c 2 "$1/$BOOT_EFI")" != MZ ]; then
+        note "Check" "  $BOOT_EFI is not an EFI program."; return 1
+    fi
+    # Only loader/loader.conf and loader/entries/*.conf, nothing that could
+    # land outside <dir>/boot.
+    if tar -tf "$1/$LOADER" 2>/dev/null | grep -qvE '^loader/(loader[.]conf|entries/|entries/[A-Za-z0-9._-]+[.]conf)?$'; then
+        note "Check" "  $LOADER holds files other than the boot entries."; return 1
+    fi
+    rm -rf "$1/boot"
+    mkdir -p "$1/boot/EFI/BOOT"
+    if ! tar -xf "$1/$LOADER" -C "$1/boot" 2>/dev/null \
+        || [ ! -f "$1/boot/loader/loader.conf" ] \
+        || ! ls "$1/boot/loader/entries/"*.conf >/dev/null 2>&1; then
+        note "Check" "  $LOADER does not carry loader.conf and the boot entries."; return 1
+    fi
+    cp "$1/$BOOT_EFI" "$1/boot/EFI/BOOT/BOOTX64.EFI" \
+        || { note "Check" "  Could not stage the bootloader."; return 1; }
     NEW_KVER=$(initrd_kver "$1/$SYS_INITRD")
     if [ -z "$NEW_KVER" ]; then
         note "Check" "  $SYS_INITRD carries no kernel modules."; return 1
@@ -265,16 +294,6 @@ check_release() {
         || _err="$SYS_IMG is not a $REL_DESKTOP image."
     [ -n "$_err" ] || [ -d "$NEW_MNT/usr/lib/modules/$NEW_KVER" ] \
         || _err="The image has no modules for the release's kernel ($NEW_KVER)."
-    _efi="$NEW_MNT/usr/lib/systemd/boot/efi/systemd-bootx64.efi"
-    [ -n "$_err" ] || { [ -f "$_efi" ] && [ -d "$NEW_MNT/usr/lib/larch/boot/loader/entries" ]; } \
-        || _err="The image carries no bootloader."
-    if [ -z "$_err" ]; then
-        rm -rf "$1/boot"
-        mkdir -p "$1/boot/EFI/BOOT"
-        { cp "$_efi" "$1/boot/EFI/BOOT/BOOTX64.EFI" \
-            && cp -r "$NEW_MNT/usr/lib/larch/boot/loader" "$1/boot/"; } \
-            || _err="Could not copy the bootloader out of the image."
-    fi
     NEW_VERSION=$(cat "$NEW_MNT/usr/lib/larch/version" 2>/dev/null || echo "$REL_TAG")
     [ -z "$_err" ] || { umount "$NEW_MNT"; note "Check" "  $_err"; return 1; }
 }

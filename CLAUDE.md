@@ -14,6 +14,7 @@ The repo produces **two separate releases**, each built from its own directory:
    - `vmlinuz` — Debian's kernel (`linux-image-amd64`)
    - `sys.initramfs` — boots the system: mounts `sys.squashfs` as `/`, LARCHCONF, the `/etc` and `/var` overlays, then `switch_root`s to systemd
    - `updater.initramfs` — the "Update LARCH" boot entry: same drivers as the installer; shows the same menu (last 5 releases × desktops) and replaces the system files. Picking another desktop **switches desktop**. No partitioning, LARCHHOME untouched; LARCHCONF untouched too unless the desktop changes (see "Desktop switch").
+   - `BOOTX64.EFI` (systemd-boot) and `loader.tar` (`loader.conf` + the boot entries) — shared by every desktop; the images don't carry a bootloader
    - `SHA256SUMS`
 
 `shared/` holds what both use: the initramfs build helpers (`shared/build-lib.sh`) and the busybox-sh runtime libraries (`shared/lib/`: `ui.sh` dialog helpers, `hw.sh` drivers/partitions, `net.sh` wired DHCP/Wi-Fi, `release.sh` release listing/download/check/install).
@@ -65,7 +66,7 @@ system/
   desktops/<desktop>/   packages.list (required), setup.sh (must enable a display manager),
                         rootfs-overlay/, remove.list, remove-files.list (optional, appended to the base's)
                         e.g. desktops/gnome/: GNOME + GDM, gdm3/custom.conf, 61-gdm.rules, gschema override
-  bootloader/           loader.conf + entries/ — installed into the image at /usr/lib/larch/boot/
+  bootloader/           loader.conf + entries/ — published as the release file loader.tar (stage 9)
   initramfs/sys/init    sys.initramfs PID 1
   initramfs/updater/init  updater.initramfs PID 1
   updater/update.sh     the updater (/usr/sbin/larch-update)
@@ -100,7 +101,8 @@ make all | system | installer | clean | test-qemu | test-qemu-local
 
 | Changed | Command |
 |---|---|
-| `system/rootfs-overlay/` or `system/bootloader/` | `./docker-build.sh system --stage 3` |
+| `system/rootfs-overlay/` | `./docker-build.sh system --stage 3` |
+| `system/bootloader/` | `./docker-build.sh system --stage 9` |
 | `system/desktops/<desktop>/*`, `setup-desktop.sh` | `./docker-build.sh system --stage 5 [--desktop <desktop>]` |
 | `system/config/packages.list` or `system/scripts/setup-chroot.sh` | `./docker-build.sh system --stage 4` |
 | `clean-rootfs.sh`, `remove.list`, `remove-files.list` | `./docker-build.sh system --stage 5` |
@@ -110,7 +112,7 @@ make all | system | installer | clean | test-qemu | test-qemu-local
 | `installer/install.sh`, `installer/lib/`, `installer/initramfs/`, `shared/lib/` | `./docker-build.sh installer` |
 | `installer/grub.cfg` | `./docker-build.sh installer --stage 3` |
 
-Stage 9 (vmlinuz + `SHA256SUMS`) must follow any of stages 6–8 for a consistent `output/system/`; it only includes the desktops of this run and deletes other `sys-*.squashfs` (they may be for another kernel). The base (`work/rootfs`) keeps apt — stage 5 cleans the per-desktop copies in `work/desktops/<desktop>/` — so any stage can be re-run.
+Stage 9 (vmlinuz, `BOOTX64.EFI`, `loader.tar`, `SHA256SUMS`) must follow any of stages 6–8 for a consistent `output/system/`; it only includes the desktops of this run and deletes other `sys-*.squashfs` (they may be for another kernel). The base (`work/rootfs`) keeps apt — stage 5 cleans the per-desktop copies in `work/desktops/<desktop>/` — so any stage can be re-run.
 
 ### Test in QEMU
 
@@ -129,13 +131,13 @@ QEMU comes from host packages (`sudo make install-deps`) or a QEMU AppImage (`$Q
 
 1. **check-deps**
 2. **debootstrap** — `work/rootfs/` from Debian Trixie; skipped if `work/rootfs/usr/` exists
-3. **base-overlay** — `copy_overlay rootfs-overlay` (`cp -a` + `chmod go-w`), and `bootloader/` → `/usr/lib/larch/boot/loader/`
+3. **base-overlay** — `copy_overlay rootfs-overlay` (`cp -a` + `chmod go-w`)
 4. **base-configure** — bind-mounts proc/sys/dev (`/dev` with `--rbind` — under rootless Podman a plain `--bind` exposes placeholder files instead of device nodes), runs `scripts/setup-chroot.sh` in the base: `packages.list` incl. `linux-image-amd64`/`linux-headers-amd64` (DKMS builds nvidia and broadcom-sta), the default user, shared services, and the iwlwifi firmware trim (here, so the initramfs firmware is trimmed too). The base is never cleaned.
 5. **desktops** — per desktop: `rsync -aHAX --delete` the base → `work/desktops/<desktop>/`; `scripts/setup-desktop.sh` holds the kernel packages, installs the desktop's `packages.list`, runs its `setup.sh`, and requires a `display-manager.service`; then the desktop's `rootfs-overlay/` (after the packages, so no conffile prompts); then `clean-rootfs.sh` with the base + desktop remove lists (apt, compiler, headers, perl, initramfs-tools, …; `systemd-update-done` last).
 6. **make-squashfs** — per desktop: empty `/etc/machine-id`, `/usr/lib/larch/version` and `/usr/lib/larch/desktop`, `mksquashfs … -comp zstd -Xcompression-level 19 -ef config/squashfs.exclude` → `output/system/sys-<desktop>.squashfs` (`/boot` excluded: the kernel ships separately)
 7. **sys-initramfs** — `MODS_BASE` + `MODS_DISK` + `MODS_INPUT` (+ their firmware), `e2fsck` → `sys.initramfs`
 8. **updater-initramfs** — also `MODS_NET` (same drivers as the installer) + firmware, curl/wpa_supplicant/udhcpc, dialog, `update.sh` → `updater.initramfs`
-9. **release-files** — `vmlinuz` from the base's `/boot`, a check that every image has modules for that kernel, `SHA256SUMS`
+9. **release-files** — `vmlinuz` from the base's `/boot`, `BOOTX64.EFI` (the base's `systemd-bootx64.efi`: `systemd-boot-efi` is listed explicitly, since apt otherwise picks the signed variant that only ships `.efi.signed`; `remove.list` purges systemd-boot from the images), `loader.tar` from `bootloader/`, a check that every image has modules for that kernel, `SHA256SUMS`
 
 ### Installer build (`installer/build.sh`)
 
@@ -152,8 +154,8 @@ Needs the base `work/rootfs` (system stages 2–4). 1 **check-deps** · 2 **inst
 
 ```
 1. LARCHEFI  — FAT32, 1 GiB
-     EFI/BOOT/BOOTX64.EFI          systemd-boot (copied out of the image)
-     loader/loader.conf, loader/entries/larch{,-debug,-update}.conf   (from the image's /usr/lib/larch/boot)
+     EFI/BOOT/BOOTX64.EFI          systemd-boot (the release file BOOTX64.EFI)
+     loader/loader.conf, loader/entries/larch{,-debug,-update}.conf   (from the release file loader.tar)
      larch-os/vmlinuz, larch-os/sys.initramfs, larch-os/updater.initramfs
 2. LARCHSYS  — ext4, 4 GiB, label LARCHSYS
      sys.squashfs                  the OS root of the installed desktop (loop-mounted read-only)
@@ -173,11 +175,11 @@ Partitions are found by **GPT partition name** (`PARTNAME=` in `/sys/class/block
 
 **Installed system:** systemd-boot → `larch-os/vmlinuz` + `larch-os/sys.initramfs` → `system/initramfs/sys/init`: load drivers (one coldplug pass, more while waiting for LARCHSYS) → mount LARCHSYS ext4 **ro** at `/run/larch/sys` → loop-mount `sys.squashfs` at `/sysroot` (dies with a hint to boot "Update LARCH" if it has no modules for the running kernel) → `e2fsck -p` + mount LARCHCONF at `/sysroot/conf` → overlays on `/sysroot/etc` and `/sysroot/var` → `mount --move` dev/proc/sys/run → `switch_root /sysroot /lib/systemd/systemd`. PID 1 thus starts with the final `/etc`: machine-id, hostname and units enabled at runtime are all visible (no kernel-command-line identity args).
 
-**Update LARCH:** systemd-boot → `larch-os/vmlinuz` + `larch-os/updater.initramfs` → `update.sh`: drivers → pick install (if several) → fsck + mount LARCHSYS rw and LARCHEFI → `net_up` → `choose_release` (installed entry marked, starting on the newest of the installed desktop; a different desktop is a **switch**, with a warning in the confirm dialog) → space check → download into `LARCHSYS:/.staging` + verify → `check_release` (squashfs magic, `ID=larchos`, the image's `/usr/lib/larch/desktop`, both initramfs and the image's modules for the same kernel, bootloader present) → LARCHEFI space check → on a switch: fsck + mount LARCHCONF, `rebuild_layers` → **commit**: `mv` the image to `sys.squashfs` (ext4 rename), `install_boot_files` (each file copied as `.new`, then renamed; stale entries removed), on a switch `swap_layers` → write `version` and `desktop` (last, so a cut-off switch is redone) → reboot. It never reads LARCHSYS for drivers, so it still works when the system files are broken. Between the two commit steps the image and kernel don't match and the system won't boot, but the old kernel+updater pair does — rerun "Update LARCH".
+**Update LARCH:** systemd-boot → `larch-os/vmlinuz` + `larch-os/updater.initramfs` → `update.sh`: drivers → pick install (if several) → fsck + mount LARCHSYS rw and LARCHEFI → `net_up` → `choose_release` (installed entry marked, starting on the newest of the installed desktop; a different desktop is a **switch**, with a warning in the confirm dialog) → space check → download into `LARCHSYS:/.staging` + verify → `check_release` (squashfs magic, `ID=larchos`, the image's `/usr/lib/larch/desktop`, both initramfs and the image's modules for the same kernel, `BOOTX64.EFI` is an EFI program, `loader.tar` holds only `loader/loader.conf` + `loader/entries/*.conf`; both staged under `.staging/boot/`) → LARCHEFI space check → on a switch: fsck + mount LARCHCONF, `rebuild_layers` → **commit**: `mv` the image to `sys.squashfs` (ext4 rename), `install_boot_files` (each file copied as `.new`, then renamed; stale entries removed), on a switch `swap_layers` → write `version` and `desktop` (last, so a cut-off switch is redone) → reboot. It never reads LARCHSYS for drivers, so it still works when the system files are broken. Between the two commit steps the image and kernel don't match and the system won't boot, but the old kernel+updater pair does — rerun "Update LARCH".
 
 ### Release listing (`shared/lib/release.sh`)
 
-GitHub's releases API JSON (no jq) is split at each release's own `"url":".../releases/<id>"`; a release counts only if it carries `vmlinuz`, `sys.initramfs`, `updater.initramfs`, `SHA256SUMS` and at least one `sys-<desktop>.squashfs` (so installer releases and old-format releases are ignored); each image becomes one line/menu entry `larch-<desktop>-<tag>` in `$RUN/releases`. `larch.source=<url>` on the kernel command line or fw_cfg `opt/larch/source` replaces GitHub with a plain HTTP directory (entries `larch-<desktop>-local` from its `SHA256SUMS`, sizes unknown).
+GitHub's releases API JSON (no jq) is split at each release's own `"url":".../releases/<id>"`; a release counts only if it carries `vmlinuz`, `sys.initramfs`, `updater.initramfs`, `BOOTX64.EFI`, `loader.tar`, `SHA256SUMS` and at least one `sys-<desktop>.squashfs` (so installer releases and old-format releases — up to v0.5.1, whose bootloader was inside the image — are ignored); each image becomes one line/menu entry `larch-<desktop>-<tag>` in `$RUN/releases`. `larch.source=<url>` on the kernel command line or fw_cfg `opt/larch/source` replaces GitHub with a plain HTTP directory (entries `larch-<desktop>-local` from its `SHA256SUMS`, sizes unknown).
 
 ### `/etc` and `/var` overlays
 
@@ -202,7 +204,7 @@ Time and timezone are automatic: `systemd-timesyncd`, and (GNOME) `desktops/gnom
 - **Add a desktop:** `system/desktops/<name>/` (lowercase `[a-z0-9]`) with `packages.list` and a `setup.sh` that enables its display manager; the next system build ships `sys-<name>.squashfs` and the menus offer `larch-<name>-<tag>`
 - **Need a driver in an initramfs:** widen the module-set regexes in `shared/build-lib.sh` (and the explicit list in `hw.sh load_drivers` if nothing autoloads it by modalias)
 - **Change the installer:** `installer/install.sh` / `installer/lib/`, then `./docker-build.sh installer`
-- **Change boot entries:** `system/bootloader/entries/` (installed by the installer and every update from the image), then `system --stage 3`
+- **Change boot entries:** `system/bootloader/entries/` (published as `loader.tar`, installed by the installer and every update), then `system --stage 9`
 - **Change the default user or password:** `system/scripts/setup-chroot.sh`, then `system --stage 4`
 
 ## Important constraints

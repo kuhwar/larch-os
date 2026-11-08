@@ -6,7 +6,7 @@ name: Build system
 # (shared/lib/release.sh):
 #
 #   sys-<desktop>.squashfs (one per system/desktops/<desktop>)
-#   vmlinuz  sys.initramfs  updater.initramfs  SHA256SUMS
+#   vmlinuz  sys.initramfs  updater.initramfs  BOOTX64.EFI  loader.tar  SHA256SUMS
 #
 # Every desktop is built in this one job from one base rootfs, so all images
 # carry modules for the one kernel the release ships. The installer and the
@@ -18,7 +18,8 @@ name: Build system
 #
 # The installer ISO is released separately (build-installer.yml, tags
 # installer-v*); the installer and updater only consider releases that carry
-# the kernel, both initramfs, SHA256SUMS and at least one image.
+# the kernel, both initramfs, the bootloader, its entries, SHA256SUMS and at
+# least one image.
 
 on:
   push:

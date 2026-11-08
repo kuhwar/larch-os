@@ -118,3 +118,10 @@ desktop-base
 # tmpfs /var until reboot — the setuid crontab is just a needless write path.
 cron
 cron-daemon-common
+
+# systemd-boot: the bootloader is a release file (stage 9 takes it from the
+# base); nothing in the running system installs or updates it.
+systemd-boot
+systemd-boot-efi
+systemd-boot-efi-amd64-signed
+systemd-boot-tools

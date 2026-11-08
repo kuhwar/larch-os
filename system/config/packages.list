@@ -151,11 +151,16 @@ fonts-liberation
 # The installer, updater and sys initramfs are assembled from this rootfs
 # (shared/build-lib.sh): mkfs.fat (dosfstools), mkfs.ext4 and e2fsck
 # (e2fsprogs), sfdisk/wipefs (util-linux — in base above), kmod, curl and
-# wpasupplicant (listed elsewhere). systemd-boot provides the bootloader the
-# installer and updater copy out of the image onto LARCHEFI.
+# wpasupplicant (listed elsewhere).
+# systemd-boot: stage 9 publishes its systemd-bootx64.efi as the release file
+# BOOTX64.EFI (the images don't carry it: remove.list). systemd-boot depends on
+# "systemd-boot-efi-signed | systemd-boot-efi" and apt takes the first, the
+# Debian-signed build, which only ships systemd-bootx64.efi.signed (meant to be
+# chained from shim) — so the plain systemd-boot-efi is listed too.
 dosfstools
 e2fsprogs
 systemd-boot
+systemd-boot-efi
 # dialog drives the installer's and the updater's full-screen UI (ncurses);
 # both builds fail without it.
 dialog

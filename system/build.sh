@@ -165,15 +165,11 @@ run_stage 2 "debootstrap — create the Debian base rootfs" && {
 }
 
 # ── Stage 3: base-overlay ────────────────────────────────────────────────────
-run_stage 3 "base-overlay — merge rootfs-overlay and bootloader configs" && {
+run_stage 3 "base-overlay — merge rootfs-overlay" && {
     require_rootfs
     copy_overlay "$SYSTEM_DIR/rootfs-overlay" "$ROOTFS_DIR"
-    # systemd-boot's config ships inside the image, so the installer and the
-    # updater install the entries that belong to the system they install.
+    # Bases from before the bootloader became release files (stage 9).
     rm -rf "$ROOTFS_DIR/usr/lib/larch/boot"
-    install -D -m 644 "$SYSTEM_DIR/bootloader/loader.conf" "$ROOTFS_DIR/usr/lib/larch/boot/loader/loader.conf"
-    install -d "$ROOTFS_DIR/usr/lib/larch/boot/loader/entries"
-    install -m 644 "$SYSTEM_DIR/bootloader/entries/"*.conf "$ROOTFS_DIR/usr/lib/larch/boot/loader/entries/"
 }
 
 # ── Stage 4: base-configure ──────────────────────────────────────────────────
@@ -274,13 +270,26 @@ run_stage 8 "updater-initramfs — build updater.initramfs" && {
 }
 
 # ── Stage 9: release-files ───────────────────────────────────────────────────
-run_stage 9 "release-files — vmlinuz and SHA256SUMS" && {
+run_stage 9 "release-files — vmlinuz, bootloader, entries and SHA256SUMS" && {
     require_rootfs
     VMLINUZ="$(find_vmlinuz)"
     [ -f "$VMLINUZ" ] || die "Kernel vmlinuz not found in rootfs/boot"
     kver=$(rootfs_kver)
     install -m 644 "$VMLINUZ" "$OUT_DIR/vmlinuz"
-    files=(vmlinuz sys.initramfs updater.initramfs)
+    # systemd-boot from the base (systemd-boot-efi; the images don't carry it)
+    # and its config from bootloader/, as release files shared by every
+    # desktop: the installer and updater put them on LARCHEFI.
+    efi="$ROOTFS_DIR/usr/lib/systemd/boot/efi/systemd-bootx64.efi"
+    [ -f "$efi" ] || die "No systemd-bootx64.efi in the base rootfs (systemd-boot-efi in packages.list) — run stage 4"
+    install -m 644 "$efi" "$OUT_DIR/BOOTX64.EFI"
+    loader_dir="$WORK_DIR/loader"
+    rm -rf "$loader_dir"
+    install -D -m 644 "$SYSTEM_DIR/bootloader/loader.conf" "$loader_dir/loader/loader.conf"
+    install -d "$loader_dir/loader/entries"
+    install -m 644 "$SYSTEM_DIR/bootloader/entries/"*.conf "$loader_dir/loader/entries/"
+    tar --format=ustar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@0 \
+        -cf "$OUT_DIR/loader.tar" -C "$loader_dir" loader
+    files=(vmlinuz sys.initramfs updater.initramfs BOOTX64.EFI loader.tar)
     for f in sys.initramfs updater.initramfs; do
         [ -f "$OUT_DIR/$f" ] || die "$OUT_DIR/$f is missing — run stages 7-8 first"
     done

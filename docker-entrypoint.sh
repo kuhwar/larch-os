@@ -9,7 +9,8 @@
 # Two builds, each in its own directory:
 #   system     system/build.sh    → output/system/ (sys-<desktop>.squashfs per
 #                                   desktop, vmlinuz, sys.initramfs,
-#                                   updater.initramfs, SHA256SUMS)
+#                                   updater.initramfs, BOOTX64.EFI,
+#                                   loader.tar, SHA256SUMS)
 #   installer  installer/build.sh → output/larch-installer.iso
 #                                   (needs the base rootfs from system stages 2-4)
 #
