@@ -23,3 +23,8 @@ picture-options='zoom'
 [org.gnome.desktop.screensaver]
 picture-uri='file:///usr/share/backgrounds/larch/larch.jpg'
 picture-options='zoom'
+
+# Arch's gdm package sets the Arch Linux logo on the login screen
+# (30_org.archlinux.gdm.gschema.override); larch shows none.
+[org.gnome.login-screen]
+logo=''

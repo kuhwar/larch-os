@@ -13,6 +13,9 @@ gnome-themes-extra
 adwaita-icon-theme
 nautilus
 gnome-terminal
+# gnome-shell-calendar-server (the top bar's calendar) links it; only an
+# optional dependency on Arch.
+evolution-data-server
 # gvfs includes the FUSE daemon on Arch; the backends are split out.
 gvfs
 gvfs-smb

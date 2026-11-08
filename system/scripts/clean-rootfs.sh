@@ -16,6 +16,27 @@ log() { echo "  [clean] $*"; }
 # Non-comment, non-blank lines of a list file, whitespace-trimmed.
 list_entries() { sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$1" | grep -v '^$' || true; }
 
+# ── Shared-library guard, part 1 ─────────────────────────────────────────────
+# What remove.list/remove-files.list take away must not be a library anything
+# left in the image links (Arch's libtool, for one, also ships libltdl, which
+# gnome-shell needs). Record every DT_NEEDED soname now, while binutils'
+# readelf is still here, and which of them are already unresolved (optional
+# plugins whose libraries Arch leaves to optdepends); part 2 fails the build if
+# the removals add to that set.
+GUARD=/.larch-libguard    # not /var/tmp: remove-files.list empties it
+mkdir -p "$GUARD"
+sonames_present() {
+    find /usr/lib \( -type f -o -type l \) \( -name '*.so' -o -name '*.so.*' \) -printf '%f\n' | sort -u
+}
+log "Recording shared-library dependencies"
+find /usr/bin /usr/lib /usr/libexec -type f \( -perm -u+x -o -name '*.so*' \) -print0 2>/dev/null \
+    | xargs -0 -r readelf -d 2>/dev/null \
+    | awk '/^File: /{f=$2} /\(NEEDED\)/{gsub(/[][]/,"",$5); print $5 "\t" f}' \
+    | sort -u > "$GUARD/needed" || true    # readelf fails on non-ELF files: fine
+cut -f1 "$GUARD/needed" | sort -u > "$GUARD/needed.sonames"
+sonames_present > "$GUARD/present.before"
+comm -23 "$GUARD/needed.sonames" "$GUARD/present.before" > "$GUARD/missing.before"
+
 # ── Remove packages (remove.list) ────────────────────────────────────────────
 # Entries are shell globs over package names; lines starting with ! keep what
 # they match. One `pacman -Rddn`: no dependency checks (what depends on a
@@ -73,6 +94,27 @@ while IFS= read -r _p; do
     for _m in $_p; do rm -rf -- "$_m"; done
 done <<< "$(list_entries /remove-files.list)"
 shopt -u nullglob dotglob
+
+# ── Shared-library guard, part 2 ─────────────────────────────────────────────
+# A soname needed by a file that is still in the image, resolvable before the
+# removals and not now, is a removal that broke something: fail here, at build
+# time, instead of with a black screen at boot.
+sonames_present > "$GUARD/present.after"
+comm -23 "$GUARD/needed.sonames" "$GUARD/present.after" \
+    | comm -23 - "$GUARD/missing.before" > "$GUARD/broken"
+BROKEN=0
+while IFS= read -r _so; do
+    [ -n "$_so" ] || continue
+    _users=$(awk -F'\t' -v so="$_so" '$1 == so {print $2}' "$GUARD/needed" \
+             | while read -r _f; do if [ -e "$_f" ]; then echo "$_f"; fi; done \
+             | head -3 | tr '\n' ' ' || true)
+    [ -n "$_users" ] || continue    # only files that were removed too need it
+    echo "  [clean] ERROR: $_so was removed but is needed by: $_users" >&2
+    BROKEN=1
+done < "$GUARD/broken"
+rm -rf "$GUARD"
+[ "$BROKEN" -eq 0 ] || { echo "  [clean] remove.list/remove-files.list removed libraries the image needs" >&2; exit 1; }
+log "No needed shared library was removed"
 
 # Static and libtool archives, wherever they are.
 find /usr/lib \( -name '*.a' -o -name '*.la' \) -delete 2>/dev/null || true

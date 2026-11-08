@@ -38,13 +38,14 @@ debugedit
 fakeroot
 flex
 m4
-libtool
 pkgconf
 texinfo
 groff
 git
 patchelf
 linux-headers
+# NOT libtool: on Arch it also ships libltdl, which libcanberra (gnome-shell),
+# libgphoto2 and graphviz link. Removing it leaves GDM without a shell.
 # gcc's runtime libraries (libgcc_s, libstdc++) are separate packages.
 !gcc-libs
 !libgcc

@@ -80,10 +80,17 @@ if [ ! -d "$_c/etc.new" ] && [ -d "$_c/var.new" ]; then
     mv "$_c/var.new" "$_c/var"
 fi
 rm -rf "$_c/etc.old" "$_c/var.old"
+# The lower layer is replaced by every update, so nothing in an upper layer may
+# point into a particular squashfs: index (records the lower root's file handle
+# and refuses to mount once it changes: "Stale file handle"), metacopy
+# (metadata-only copy-ups whose data stays in the old lower layer) and
+# redirect_dir (renamed directories referring to lower paths) are all off.
+# Arch's kernel turns the first two on by default (OVERLAY_FS_INDEX/METACOPY=y).
+OVL_OPTS="index=off,metacopy=off,redirect_dir=off"
 for _d in etc var; do
     mkdir -p "$NEWROOT/conf/$_d" "$NEWROOT/conf/$_d-work"
     mount -t overlay overlay \
-        -o "lowerdir=$NEWROOT/$_d,upperdir=$NEWROOT/conf/$_d,workdir=$NEWROOT/conf/$_d-work" \
+        -o "lowerdir=$NEWROOT/$_d,upperdir=$NEWROOT/conf/$_d,workdir=$NEWROOT/conf/$_d-work,$OVL_OPTS" \
         "$NEWROOT/$_d" || die "Could not mount the /$_d overlay."
 done
 
