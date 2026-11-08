@@ -69,7 +69,7 @@
 # ── Setuid/setgid helpers with no job on this design ─────────────────────────
 # Their packages (util-linux, shadow, polkit, gstreamer) are depended on.
 # Kept: passwd (GNOME Settings runs it as the user), unix_chkpwd (lock screen),
-# polkit-agent-helper-1 (authentication dialogs), dbus-daemon-launch-helper,
+# dbus-daemon-launch-helper (polkit-agent-helper-1 is a socket service, not setuid),
 # fusermount3 (AppImage, gvfs, document portal), newuidmap/newgidmap (file
 # capabilities; rootless Podman), nvidia-modprobe (CUDA loads nvidia-uvm on
 # demand). mount/umount lose setuid in clean-rootfs.sh.
@@ -95,6 +95,26 @@
 /usr/bin/expiry
 # GStreamer's PTP clock helper (file capabilities, for AES67 network audio).
 /usr/lib/gstreamer-1.0/gst-ptp-helper
+
+# ── SSH server (no remote shell on larch-os) ─────────────────────────────────
+# Arch's openssh is one package (client + server), and GNOME's gcr depends on
+# it for ssh-agent integration. The client and ssh-agent stay; sshd, its
+# helpers and units go, as does setuid ssh-keysign (host-based auth).
+/usr/bin/sshd
+/usr/lib/ssh/sshd-auth
+/usr/lib/ssh/sshd-session
+/usr/lib/ssh/sftp-server
+/usr/lib/ssh/ssh-keysign
+/usr/lib/systemd/system/sshd.service
+/usr/lib/systemd/system/sshd@.service
+/usr/lib/systemd/system/sshd.socket
+/usr/lib/systemd/system/sshdgenkeys.service
+/etc/ssh/sshd_config
+/etc/ssh/sshd_config.d
+/etc/pam.d/sshd
+
+# ksu (krb5, setuid): Kerberos su; root is locked.
+/usr/bin/ksu
 
 # ── GUI bits of system-config-printer ────────────────────────────────────────
 # Only its D-Bus service (org.fedoraproject.Config.Printing) is needed, by

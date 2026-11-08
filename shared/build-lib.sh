@@ -195,7 +195,14 @@ bundle_modules() {
         # Unquoted on purpose: expands the glob names.
         for f in "$fwsrc"/$fw "$fwsrc"/$fw.xz "$fwsrc"/$fw.zst; do
             [ -e "$f" ] || continue
-            install -D -m 644 "$f" "$build_dir/usr/lib/firmware/${f#"$fwsrc"/}"
+            # A declared name can be a directory of per-board files (Arch:
+            # ath11k/WCN6855/hw2.0/nfa765/); copy it whole.
+            if [ -d "$f" ]; then
+                mkdir -p "$build_dir/usr/lib/firmware/${f#"$fwsrc"/}"
+                cp -aL "$f/." "$build_dir/usr/lib/firmware/${f#"$fwsrc"/}/"
+            else
+                install -D -m 644 "$f" "$build_dir/usr/lib/firmware/${f#"$fwsrc"/}"
+            fi
         done
     done < "$fwlist"
     mkdir -p "$build_dir/usr/lib/firmware"

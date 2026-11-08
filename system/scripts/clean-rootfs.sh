@@ -81,6 +81,13 @@ find /usr/lib \( -name '*.a' -o -name '*.la' \) -delete 2>/dev/null || true
 # They stay for root, but user mounts need fstab `user` entries (there are
 # none), and udisks / fusermount3 cover removable drives and FUSE.
 chmod u-s /usr/bin/mount /usr/bin/umount
+# mount.cifs (cifs-utils, via Samba's client libs): gvfs-smb uses libsmbclient,
+# not kernel CIFS mounts. libgtop_server2: only needed where /proc is not
+# world-readable. wall/write (setgid tty): messages to other users' terminals;
+# there are no text logins.
+for _f in /usr/bin/mount.cifs /usr/lib/libgtop/libgtop_server2 /usr/bin/wall /usr/bin/write; do
+    [ -e "$_f" ] && chmod ug-s "$_f"
+done
 
 # What still runs with privileges, for the build log (compare with the list in
 # CLAUDE.md / remove-files.list).

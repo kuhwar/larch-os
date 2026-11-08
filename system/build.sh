@@ -115,11 +115,20 @@ mount_chroot_pseudofs() {
 }
 
 umount_chroot_pseudofs() {
-    local root="${1:-${CHROOT_MOUNTED:-}}"
+    local root="${1:-${CHROOT_MOUNTED:-}}" m
     [ -n "$root" ] || return 0
-    umount -Rl "$root/dev"  2>/dev/null || true
-    umount -lf "$root/sys"  2>/dev/null || true
-    umount -lf "$root/proc" 2>/dev/null || true
+    # Lazy and recursive, never -f: MNT_FORCE needs CAP_SYS_ADMIN in the
+    # initial user namespace, so under rootless Podman `umount -f` fails with
+    # EPERM and leaves the mount behind (stage 5's rsync then walked a live
+    # /sys). A mount that survives is fatal rather than silently copied.
+    for m in dev sys proc; do
+        umount -Rl "$root/$m" 2>/dev/null || true
+    done
+    for m in dev sys proc; do
+        if mountpoint -q "$root/$m"; then
+            echo "ERROR: could not unmount $root/$m" >&2; exit 1
+        fi
+    done
     # Under rootless Podman the bootstrap can leave the rootfs's own /dev/null
     # as a regular file (no mknod). Empty it so nothing written there by an earlier
     # build ships in the squashfs (devtmpfs hides it at runtime anyway).
@@ -217,7 +226,11 @@ run_stage 5 "desktops — install each desktop on a copy of the base" && {
         dsrc="$SYSTEM_DIR/desktops/$de"
         info "[$de] Copying the base → $root"
         mkdir -p "$root"
-        rsync -aHAX --numeric-ids --delete "$ROOTFS_DIR/" "$root/"
+        # The pseudo-filesystems' mount points only; their contents (and any
+        # left in the copy by an earlier run) never belong in an image.
+        rsync -aHAX --numeric-ids --delete --delete-excluded \
+            --exclude='/proc/*' --exclude='/sys/*' --exclude='/dev/*' --exclude='/run/*' \
+            "$ROOTFS_DIR/" "$root/"
 
         mount_chroot_pseudofs "$root"
         rm -f "$root/etc/resolv.conf"
