@@ -1,5 +1,5 @@
 # Files and directories deleted from the rootfs before squashfs (stage 5,
-# scripts/clean-rootfs.sh, after the remove.list purge). For things whose
+# scripts/clean-rootfs.sh, after the remove.list removal). For things whose
 # package must stay (essential, or a dependency of something needed), and for
 # build leftovers no package owns.
 #
@@ -10,39 +10,50 @@
 # wallpaper allow-list, chmod) stays in clean-rootfs.sh.
 
 # ── Package manager ──────────────────────────────────────────────────────────
-/usr/bin/apt*
-/usr/bin/dpkg*
-/usr/lib/apt
-/usr/lib/dpkg
-/var/lib/apt
-/var/lib/dpkg
-/var/cache/apt
-/var/cache/debconf
-/etc/apt
-/etc/dpkg
-/usr/lib/python3/dist-packages/apt*
-/usr/lib/python3/dist-packages/debian*
-# dpkg's own daily backup job would fail every run once dpkg is gone.
-/usr/lib/systemd/system/dpkg-db-backup.service
-/usr/lib/systemd/system/dpkg-db-backup.timer
-/etc/systemd/system/timers.target.wants/dpkg-db-backup.timer
-/etc/cron.daily/dpkg
+/usr/bin/pacman*
+/usr/bin/makepkg*
+/usr/bin/repo-add
+/usr/bin/repo-elephant
+/usr/bin/repo-remove
+/usr/bin/vercmp
+/usr/bin/testpkg
+/usr/lib/libalpm.so*
+/usr/share/pacman
+/usr/share/makepkg
+/usr/share/makepkg-template
+/usr/share/libalpm
+/var/lib/pacman
+/var/cache/pacman
+/var/log/pacman.log
+/etc/pacman.conf
+/etc/pacman.d
+/etc/makepkg.conf
+/etc/makepkg.conf.d
+/etc/makepkg.d
+
+# ── systemd-boot ─────────────────────────────────────────────────────────────
+# Part of Arch's systemd package. The bootloader is a release file (stage 9
+# takes systemd-bootx64.efi from the base); nothing in the running system
+# installs or updates it.
+/usr/lib/systemd/boot
+/usr/bin/bootctl
+/usr/lib/systemd/system/systemd-boot-update.service
+/usr/lib/systemd/system/systemd-boot-random-seed.service
+/usr/lib/systemd/system/sysinit.target.wants/systemd-boot-random-seed.service
 
 # ── Build leftovers ──────────────────────────────────────────────────────────
-# Whatever the toolchain purge left behind (cc1 alone is ~60 MB).
-/usr/libexec/gcc
 /usr/lib/gcc
-/usr/bin/gcc
-# Dev headers; static/libtool archives are found by name in clean-rootfs.sh.
 /usr/include/*
-# DKMS sources: broadcom-sta-dkms and nvidia-kernel-dkms built their .ko into
-# /lib/modules at stage 4.
-/usr/src/linux-headers-*
-/usr/src/broadcom-sta-*
-/usr/src/nvidia-*
+# DKMS sources: nvidia-550xx-dkms and broadcom-wl-dkms built their .ko into
+# /usr/lib/modules at stage 4.
+/usr/src/*
 /var/lib/dkms
 /usr/lib/modules/*/build
 /usr/lib/modules/*/source
+# NVIDIA's X.Org driver and GLX server module (no X server in the image).
+/usr/lib/xorg/modules/drivers/nvidia_drv.so
+/usr/lib/nvidia/xorg
+/usr/bin/nvidia-xconfig
 
 # ── Docs ─────────────────────────────────────────────────────────────────────
 # Translations (/usr/share/locale) and translated GNOME help are kept: every
@@ -52,65 +63,49 @@
 /usr/share/doc
 /usr/share/man
 /usr/share/info
+/usr/share/gtk-doc
 /usr/share/i18n
 
 # ── Setuid/setgid helpers with no job on this design ─────────────────────────
-# Their packages (util-linux, passwd, gstreamer) are essential or depended on.
+# Their packages (util-linux, shadow, polkit, gstreamer) are depended on.
 # Kept: passwd (GNOME Settings runs it as the user), unix_chkpwd (lock screen),
-# dbus-daemon-launch-helper, fusermount3 (AppImage, gvfs, document portal),
-# newuidmap/newgidmap (rootless Podman), nvidia-modprobe (CUDA loads
-# nvidia-uvm on demand). mount/umount lose setuid in clean-rootfs.sh.
+# polkit-agent-helper-1 (authentication dialogs), dbus-daemon-launch-helper,
+# fusermount3 (AppImage, gvfs, document portal), newuidmap/newgidmap (file
+# capabilities; rootless Podman), nvidia-modprobe (CUDA loads nvidia-uvm on
+# demand). mount/umount lose setuid in clean-rootfs.sh.
 # su: root is locked; the only other account is the user's own.
 /usr/bin/su
 /etc/pam.d/su
 /etc/pam.d/su-l
+# pkexec: runs programs as root after admin authentication; there is no admin.
+/usr/bin/pkexec
 # chfn: GNOME renames via AccountsService (usermod, as root).
 /usr/bin/chfn
 /etc/pam.d/chfn
 # chsh: bash is the only shell, and none can be installed.
 /usr/bin/chsh
 /etc/pam.d/chsh
-# gpasswd: group administration; no group has administrators.
+# gpasswd, newgrp/sg: group administration and switching; no group has a
+# password or administrators.
 /usr/bin/gpasswd
-# chage: password ageing (setgid shadow); nothing uses it.
+/usr/bin/newgrp
+/usr/bin/sg
+# chage, expiry: password ageing; nothing uses it.
 /usr/bin/chage
+/usr/bin/expiry
 # GStreamer's PTP clock helper (file capabilities, for AES67 network audio).
-/usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-ptp-helper
-
-# ── PipeWire's ONNX plugin (onnxruntime itself is in remove.list) ────────────
-/usr/lib/x86_64-linux-gnu/spa-0.2/filter-graph/libspa-filter-graph-plugin-onnx.so
-
-# ── colord's SANE helper and sensor plugin (SANE itself is in remove.list) ──
-/usr/libexec/colord-sane
-/usr/lib/x86_64-linux-gnu/colord-plugins/libcolord_sensor_sane.so
+/usr/lib/gstreamer-1.0/gst-ptp-helper
 
 # ── GUI bits of system-config-printer ────────────────────────────────────────
 # Only its D-Bus service (org.fedoraproject.Config.Printing) is needed, by
-# GNOME Settings' Printers panel. The "Print Settings" launcher duplicates
-# Settings, and GNOME has no tray for the applet (gsd-print-notifications
-# covers printer notifications).
+# GNOME Settings' Printers panel.
 /usr/share/applications/system-config-printer.desktop
 /etc/xdg/autostart/print-applet.desktop
 
-# ── Vulkan drivers that never apply ──────────────────────────────────────────
-# Debian's amd64 Mesa builds every driver. lvp = software (llvmpipe) Vulkan;
-# gfxstream/virtio = VM-guest-only; Asahi (Apple Silicon) and Freedreno
-# (Qualcomm Adreno) GPUs never appear on an x86 PC. GTK4 falls back to its GL
-# renderer without a hardware Vulkan ICD; Flatpak apps bring their own Mesa.
-/usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
-/usr/lib/x86_64-linux-gnu/libvulkan_gfxstream.so
-/usr/lib/x86_64-linux-gnu/libvulkan_virtio.so
-/usr/lib/x86_64-linux-gnu/libvulkan_asahi.so
-/usr/lib/x86_64-linux-gnu/libvulkan_freedreno.so
-/usr/share/vulkan/icd.d/lvp_icd*.json
-/usr/share/vulkan/icd.d/gfxstream*_icd*.json
-/usr/share/vulkan/icd.d/virtio_icd*.json
-/usr/share/vulkan/icd.d/asahi_icd*.json
-/usr/share/vulkan/icd.d/freedreno_icd*.json
-
-# ── Firmware for hardware that's never in a PC (~100 MB raw) ─────────────────
+# ── Firmware for hardware that's never in a PC ───────────────────────────────
 # Kept on purpose: ti/ (TAS2781-family laptop amplifiers) and nxp/ (BT/Wi-Fi
 # modules). Dangling compatibility symlinks are cleaned up by clean-rootfs.sh.
+# Names match with or without Arch's .zst suffix.
 # MediaTek Filogic router/AP SoCs and cards.
 /usr/lib/firmware/mediatek/mt7622*
 /usr/lib/firmware/mediatek/mt7981*
@@ -122,8 +117,7 @@
 /usr/lib/firmware/mediatek/mt81*
 /usr/lib/firmware/mediatek/sof
 /usr/lib/firmware/mediatek/sof-tplg
-# Qualcomm router/AP chips (IPQ/QCN, QCA4019/9888/9984/99X0) and Snapdragon
-# SoC Wi-Fi (WCN3990, WCN6750).
+# Qualcomm router/AP chips and Snapdragon SoC Wi-Fi.
 /usr/lib/firmware/ath10k/QCA4019
 /usr/lib/firmware/ath10k/QCA9888
 /usr/lib/firmware/ath10k/QCA9984

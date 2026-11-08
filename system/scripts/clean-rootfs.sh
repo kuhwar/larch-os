@@ -16,13 +16,22 @@ log() { echo "  [clean] $*"; }
 # Non-comment, non-blank lines of a list file, whitespace-trimmed.
 list_entries() { sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$1" | grep -v '^$' || true; }
 
-export DEBIAN_FRONTEND=noninteractive
+# ── Remove packages (remove.list) ────────────────────────────────────────────
+# Entries are shell globs over package names; lines starting with ! keep what
+# they match. One `pacman -Rddn`: no dependency checks (what depends on a
+# removed build tool keeps working without it), no .pacsave files.
+#
+# No pacman hook may run: removing linux-headers would fire DKMS's remove hook
+# and delete the nvidia/wl modules built against them, and the rest (sysusers,
+# tmpfiles, schemas, …) have nothing left to do. A same-named hook in
+# /etc/pacman.d/hooks linked to /dev/null disables a system one; scriptlets
+# are skipped with --noscriptlet. /etc/pacman.d goes with the package manager.
+log "Removing packages from remove.list"
+mkdir -p /etc/pacman.d/hooks
+for _h in /usr/share/libalpm/hooks/*.hook; do
+    [ -e "$_h" ] && ln -sf /dev/null "/etc/pacman.d/hooks/$(basename "$_h")"
+done
 
-# ── Purge packages (remove.list) ─────────────────────────────────────────────
-# Entries are dpkg-query patterns; lines starting with ! exclude what they match.
-log "Purging packages from remove.list"
-# Here-strings, not < <(…): /dev isn't mounted in the chroot at stage 5, so
-# process substitution (/dev/fd/N) fails.
 PATTERNS=(); EXCLUDES=()
 while IFS= read -r _e; do
     [ -n "$_e" ] || continue
@@ -33,18 +42,21 @@ while IFS= read -r _e; do
 done <<< "$(list_entries /remove.list)"
 
 PURGE=()
-while read -r _status _pkg; do
-    [ "${_status:-}" = installed ] || continue
+while read -r _pkg; do
+    [ -n "$_pkg" ] || continue
     for _x in "${EXCLUDES[@]}"; do
         # shellcheck disable=SC2053  # unquoted on purpose: glob match
         [[ $_pkg == $_x ]] && continue 2
     done
-    PURGE+=("$_pkg")
-done <<< "$(dpkg-query -W -f='${db:Status-Status} ${Package}\n' "${PATTERNS[@]}" 2>/dev/null || true)"
+    for _p in "${PATTERNS[@]}"; do
+        # shellcheck disable=SC2053
+        if [[ $_pkg == $_p ]]; then PURGE+=("$_pkg"); break; fi
+    done
+done <<< "$(pacman -Qq)"
 
 if [ "${#PURGE[@]}" -gt 0 ]; then
-    log "  ${#PURGE[@]} packages"
-    dpkg --purge --force-depends "${PURGE[@]}" 2>/dev/null || true
+    log "  ${#PURGE[@]} packages: ${PURGE[*]}"
+    pacman -Rddn --noconfirm --noprogressbar --noscriptlet "${PURGE[@]}"
 fi
 
 # ── Delete files (remove-files.list) ─────────────────────────────────────────
@@ -62,7 +74,7 @@ while IFS= read -r _p; do
 done <<< "$(list_entries /remove-files.list)"
 shopt -u nullglob dotglob
 
-# Static and libtool archives left by *-dev packages, wherever they are.
+# Static and libtool archives, wherever they are.
 find /usr/lib \( -name '*.a' -o -name '*.la' \) -delete 2>/dev/null || true
 
 # ── Drop setuid from mount/umount ────────────────────────────────────────────
@@ -70,14 +82,15 @@ find /usr/lib \( -name '*.a' -o -name '*.la' \) -delete 2>/dev/null || true
 # none), and udisks / fusermount3 cover removable drives and FUSE.
 chmod u-s /usr/bin/mount /usr/bin/umount
 
+# What still runs with privileges, for the build log (compare with the list in
+# CLAUDE.md / remove-files.list).
+log "setuid/setgid files left:"
+find / -xdev -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null | sort | sed 's/^/      /'
+
 # ── Wallpapers: keep only larch-os's own ─────────────────────────────────────
-# rootfs-overlay/usr/share/backgrounds/larch, set by each desktop's own
-# config (GNOME: desktops/gnome's 90_larch.gschema.override). Drop any other a
-# dependency pulled in, so the desktop's wallpaper picker offers just that one. desktop-base (purged above) may leave its schema override.
 log "Trimming wallpapers"
 find /usr/share/backgrounds -mindepth 1 -maxdepth 1 ! -name larch -exec rm -rf {} + 2>/dev/null || true
 find /usr/share/gnome-background-properties -mindepth 1 ! -name 'larch.xml' -delete 2>/dev/null || true
-rm -f /usr/share/glib-2.0/schemas/10_desktop-base.gschema.override
 if command -v glib-compile-schemas >/dev/null && [ -d /usr/share/glib-2.0/schemas ]; then
     glib-compile-schemas /usr/share/glib-2.0/schemas
 fi

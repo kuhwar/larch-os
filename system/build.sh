@@ -7,14 +7,15 @@
 # $LARCH_OUTPUT_DIR/system/ (default output/system/):
 #
 #   sys-<desktop>.squashfs  one OS root per desktop (installed as LARCHSYS:/sys.squashfs)
-#   vmlinuz                 Debian's kernel — the same for every desktop
+#   vmlinuz                 Arch's kernel — the same for every desktop
 #   sys.initramfs           boots the system: mounts the root and /etc, /var
 #   updater.initramfs       the "Update LARCH" boot entry
 #   SHA256SUMS
 #
 # Stages:
 #   1. check-deps        — verify build tools
-#   2. debootstrap       — create the Debian Trixie base (work/rootfs)
+#   2. bootstrap         — install Arch's `base` from the pinned snapshot
+#                          (config/arch-snapshot) into work/rootfs
 #   3. base-overlay      — merge rootfs-overlay/ and the bootloader configs into it
 #   4. base-configure    — scripts/setup-chroot.sh in the base (kernel, drivers, services)
 #   5. desktops          — per desktop: copy the base to work/desktops/<desktop>,
@@ -49,10 +50,15 @@ LARCH_VERSION="${LARCH_VERSION:-dev-$(date -u +%Y%m%d%H%M)}"
 # shellcheck source=../shared/build-lib.sh
 . "$ROOT_DIR/shared/build-lib.sh"
 
-DEBIAN_MIRROR="http://deb.debian.org/debian"
-DEBIAN_SUITE="trixie"
-DEBIAN_ARCH="amd64"
-DEBOOTSTRAP_INCLUDE="bash,ca-certificates,locales,systemd"
+# Every package comes from one dated snapshot of the Arch Linux Archive, so a
+# release can be rebuilt exactly; bump config/arch-snapshot to move forward
+# (then rebuild from stage 2). LARCH_ARCH_MIRROR points at another mirror
+# root instead (e.g. https://geo.mirror.pkgbuild.com for the current repos —
+# a moving target, for experiments only).
+ARCH_SNAPSHOT="${LARCH_ARCH_SNAPSHOT:-$(sed -e 's/#.*//' -e 's/[[:space:]]//g' "$SYSTEM_DIR/config/arch-snapshot" | grep -v '^$' | head -1)}"
+[[ "$ARCH_SNAPSHOT" =~ ^[0-9]{4}/[0-9]{2}/[0-9]{2}$ ]] || die "config/arch-snapshot must be YYYY/MM/DD, not '$ARCH_SNAPSHOT'"
+ARCH_MIRROR="${LARCH_ARCH_MIRROR:-https://archive.archlinux.org/repos/$ARCH_SNAPSHOT}"
+BOOTSTRAP_PKGS=(base)
 
 # ── Arguments ────────────────────────────────────────────────────────────────
 DESKTOPS="${LARCH_DESKTOPS:-}"
@@ -114,8 +120,8 @@ umount_chroot_pseudofs() {
     umount -Rl "$root/dev"  2>/dev/null || true
     umount -lf "$root/sys"  2>/dev/null || true
     umount -lf "$root/proc" 2>/dev/null || true
-    # Under rootless Podman, debootstrap leaves the rootfs's own /dev/null as a
-    # regular file (no mknod). Empty it so nothing written there by an earlier
+    # Under rootless Podman the bootstrap can leave the rootfs's own /dev/null
+    # as a regular file (no mknod). Empty it so nothing written there by an earlier
     # build ships in the squashfs (devtmpfs hides it at runtime anyway).
     if [ -f "$root/dev/null" ] && [ ! -L "$root/dev/null" ]; then
         : > "$root/dev/null"
@@ -142,7 +148,7 @@ merged_list() {
 # ── Stage 1: check-deps ──────────────────────────────────────────────────────
 run_stage 1 "check-deps" && {
     MISSING=()
-    for cmd in debootstrap mksquashfs rsync cpio find xz gzip sha256sum; do
+    for cmd in pacman mksquashfs rsync cpio find xz gzip sha256sum; do
         command -v "$cmd" &>/dev/null || MISSING+=("$cmd")
     done
     if [ "${#MISSING[@]}" -gt 0 ]; then
@@ -153,14 +159,28 @@ run_stage 1 "check-deps" && {
     info "All dependencies found"
 }
 
-# ── Stage 2: debootstrap ─────────────────────────────────────────────────────
-run_stage 2 "debootstrap — create the Debian base rootfs" && {
+# ── Stage 2: bootstrap ───────────────────────────────────────────────────────
+# The builder's pacman installs `base` into the empty rootfs (what pacstrap
+# does, but with our own pseudo-fs mounts, which also work under rootless
+# Podman). Package signatures are checked against the builder's keyring; the
+# rootfs gets its own in stage 4.
+run_stage 2 "bootstrap — install Arch base from snapshot $ARCH_SNAPSHOT" && {
     if [ -d "$ROOTFS_DIR/usr" ]; then
-        info "Base rootfs already exists, skipping debootstrap. Use --clean to restart."
+        info "Base rootfs already exists, skipping the bootstrap. Use --clean to restart."
     else
-        mkdir -p "$ROOTFS_DIR"
-        debootstrap --arch="$DEBIAN_ARCH" --include="$DEBOOTSTRAP_INCLUDE" \
-            "$DEBIAN_SUITE" "$ROOTFS_DIR" "$DEBIAN_MIRROR"
+        info "Mirror: $ARCH_MIRROR"
+        conf="$WORK_DIR/pacman.conf"
+        sed "s|@MIRROR@|$ARCH_MIRROR|" "$SYSTEM_DIR/config/pacman.conf" > "$conf"
+        mkdir -p "$ROOTFS_DIR"/{dev,proc,sys,run,etc,var/lib/pacman,var/cache/pacman/pkg,var/log}
+        install -d -m 1777 "$ROOTFS_DIR/tmp"
+        mount_chroot_pseudofs "$ROOTFS_DIR"
+        pacman --root "$ROOTFS_DIR" --config "$conf" \
+            --cachedir "$ROOTFS_DIR/var/cache/pacman/pkg" \
+            -Sy --noconfirm --noprogressbar "${BOOTSTRAP_PKGS[@]}"
+        umount_chroot_pseudofs
+        # The rootfs's own pacman (stages 4-5) uses the same snapshot.
+        install -m 644 "$conf" "$ROOTFS_DIR/etc/pacman.conf"
+        rm -rf "$ROOTFS_DIR"/var/cache/pacman/pkg/*
     fi
 }
 
@@ -177,13 +197,16 @@ run_stage 4 "base-configure — install the base packages and configure" && {
     require_rootfs
     mount_chroot_pseudofs "$ROOTFS_DIR"
     # The image's resolv.conf is a symlink into /run (set below); replace it
-    # with the builder's for apt, without following the link.
+    # with the builder's for pacman, without following the link.
     rm -f "$ROOTFS_DIR/etc/resolv.conf"
     cp /etc/resolv.conf "$ROOTFS_DIR/etc/resolv.conf"
     chroot_run "$ROOTFS_DIR" "$SYSTEM_DIR/scripts/setup-chroot.sh" \
         "$SYSTEM_DIR/config/packages.list" "$SYSTEM_DIR/config/remove.list"
     rm -f "$ROOTFS_DIR/setup-chroot.sh" "$ROOTFS_DIR/packages.list" "$ROOTFS_DIR/remove.list"
     umount_chroot_pseudofs
+    # pacman ran with --overwrite '/etc/*': put back any overlay file a package
+    # replaced.
+    copy_overlay "$SYSTEM_DIR/rootfs-overlay" "$ROOTFS_DIR"
 }
 
 # ── Stage 5: desktops ────────────────────────────────────────────────────────
@@ -202,8 +225,9 @@ run_stage 5 "desktops — install each desktop on a copy of the base" && {
         deps=("$dsrc/packages.list:desktop-packages.list")
         [ -f "$dsrc/setup.sh" ] && deps+=("$dsrc/setup.sh:desktop-setup.sh")
         chroot_run "$root" "$SYSTEM_DIR/scripts/setup-desktop.sh" "${deps[@]}"
-        # After the packages, so the desktop's files win over package defaults
-        # without dpkg conffile prompts.
+        # After the packages (installed with --overwrite '/etc/*'), so the base's
+        # and the desktop's files win over package defaults.
+        copy_overlay "$SYSTEM_DIR/rootfs-overlay" "$root"
         [ -d "$dsrc/rootfs-overlay" ] && copy_overlay "$dsrc/rootfs-overlay" "$root"
         info "[$de] Stripping the package manager"
         chroot_run "$root" "$SYSTEM_DIR/scripts/clean-rootfs.sh" \
@@ -226,6 +250,7 @@ run_stage 6 "make-squashfs — one sys-<desktop>.squashfs per desktop" && {
         # layer, and an empty file here keeps systemd from treating a missing
         # one as a first boot. D-Bus's copy follows it.
         : > "$root/etc/machine-id"
+        mkdir -p "$root/var/lib/dbus"
         ln -sfn /etc/machine-id "$root/var/lib/dbus/machine-id"
         # What the image is: shown by the updater, checked by release.sh.
         mkdir -p "$root/usr/lib/larch"
@@ -274,14 +299,14 @@ run_stage 8 "updater-initramfs — build updater.initramfs" && {
 run_stage 9 "release-files — vmlinuz, bootloader, entries and SHA256SUMS" && {
     require_rootfs
     VMLINUZ="$(find_vmlinuz)"
-    [ -f "$VMLINUZ" ] || die "Kernel vmlinuz not found in rootfs/boot"
+    [ -f "$VMLINUZ" ] || die "Kernel vmlinuz not found in the rootfs (/usr/lib/modules/<ver>/vmlinuz)"
     kver=$(rootfs_kver)
     install -m 644 "$VMLINUZ" "$OUT_DIR/vmlinuz"
-    # systemd-boot from the base (systemd-boot-efi; the images don't carry it)
+    # systemd-boot from the base (part of Arch's systemd; the images don't carry it)
     # and its config from bootloader/, as release files shared by every
     # desktop: the installer and updater put them on LARCHEFI.
     efi="$ROOTFS_DIR/usr/lib/systemd/boot/efi/systemd-bootx64.efi"
-    [ -f "$efi" ] || die "No systemd-bootx64.efi in the base rootfs (systemd-boot-efi in packages.list) — run stage 4"
+    [ -f "$efi" ] || die "No systemd-bootx64.efi in the base rootfs — run stage 4"
     install -m 644 "$efi" "$OUT_DIR/BOOTX64.EFI"
     loader_dir="$WORK_DIR/loader"
     rm -rf "$loader_dir"

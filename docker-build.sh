@@ -56,7 +56,7 @@ if [ "$CLEAN_MODE" -eq 1 ]; then
         docker run --rm \
             -v "$OUTPUT_DIR:/output" \
             -v "$WORK_DIR:/work" \
-            debian:trixie-slim \
+            docker.io/library/archlinux:base \
             sh -c 'find /output /work -mindepth 1 -delete 2>/dev/null; true'
     fi
     rm -rf "$OUTPUT_DIR" "$WORK_DIR"

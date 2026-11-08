@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build system (privileged Docker)
-        # Log free space on / every 30s, so that if a heavy stage (debootstrap,
+        # Log free space on / every 30s, so that if a heavy stage (bootstrap,
         # mksquashfs, initramfs packing) runs the runner out of space, the drop
         # is visible right before the failure.
         env:

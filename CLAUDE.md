@@ -4,14 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project is
 
-**larch-os** is a minimal, immutable ("atomic") Linux distribution on Debian Trixie, offered with several desktop environments (GNOME Wayland today; KDE, COSMIC, … as `system/desktops/<desktop>/` are added). The OS root is a read-only SquashFS image (`sys.squashfs`, one per desktop); `/etc` and `/var` are overlays whose upper layers persist on a config partition, `/home` is its own partition. Applications are delivered exclusively via Flatpak. There is no running package manager.
+**larch-os** is a minimal, immutable ("atomic") Linux distribution built from Arch Linux packages (one pinned Arch Linux Archive snapshot per release, `system/config/arch-snapshot`), offered with several desktop environments (GNOME Wayland today; KDE, COSMIC, … as `system/desktops/<desktop>/` are added). The OS root is a read-only SquashFS image (`sys.squashfs`, one per desktop); `/etc` and `/var` are overlays whose upper layers persist on a config partition, `/home` is its own partition. Applications are delivered exclusively via Flatpak. There is no running package manager.
 
 The repo produces **two separate releases**, each built from its own directory:
 
-1. **The installer** (`installer/`) → `larch-installer.iso`. It holds *only* the installer — GRUB, Debian's kernel and `installer.initramfs` (every storage, input and network driver plus firmware, the tools, `install.sh`). **No system files.** The installer asks full name and password, gets online, lists the releases, one entry per desktop (`larch-gnome-v0.1.5`, `larch-cosmic-v0.1.5`, `larch-gnome-v0.1.4`, …), partitions the disk and **downloads the chosen one** onto it.
+1. **The installer** (`installer/`) → `larch-installer.iso`. It holds *only* the installer — GRUB, the system's kernel and `installer.initramfs` (every storage, input and network driver plus firmware, the tools, `install.sh`). **No system files.** The installer asks full name and password, gets online, lists the releases, one entry per desktop (`larch-gnome-v0.1.5`, `larch-cosmic-v0.1.5`, `larch-gnome-v0.1.4`, …), partitions the disk and **downloads the chosen one** onto it.
 2. **The system** (`system/`) → a set of files published as a GitHub release (tags `v*`):
    - `sys-<desktop>.squashfs` — one OS root per desktop, all built from one base (installed as `LARCHSYS:/sys.squashfs`)
-   - `vmlinuz` — Debian's kernel (`linux-image-amd64`)
+   - `vmlinuz` — Arch's kernel (`linux`)
    - `sys.initramfs` — boots the system: mounts `sys.squashfs` as `/`, LARCHCONF, the `/etc` and `/var` overlays, then `switch_root`s to systemd
    - `updater.initramfs` — the "Update LARCH" boot entry: same drivers as the installer; shows the same menu (last 5 releases × desktops) and replaces the system files. Picking another desktop **switches desktop**. No partitioning, LARCHHOME untouched; LARCHCONF untouched too unless the desktop changes (see "Desktop switch").
    - `BOOTX64.EFI` (systemd-boot) and `loader.tar` (`loader.conf` + the boot entries) — shared by every desktop; the images don't carry a bootloader
@@ -42,10 +42,10 @@ The **hostname** is not asked for either: it is derived as `<username>-<brand>-<
 - **Networking is always DHCP** with DNS provided by DHCP. No network configuration UI/flow.
 - **Single fixed user.** The account created at install time is the only user. There is **no facility to add or remove users** afterward — user management is intentionally absent. `rootfs-overlay/etc/polkit-1/rules.d/99-larch-users.rules` denies `org.freedesktop.accounts.user-administration` and `org.gnome.controlcenter.user-accounts.administration` (add/delete users, account type, autologin in GNOME Settings → Users); the user can still change their own password, name and avatar (`change-own-*` actions).
 - **No remote shell.** No SSH server ships in the image, and `rootfs-overlay/etc/polkit-1/rules.d/99-larch-ssh.rules` denies `org.gnome.controlcenter.remote-login-helper`, so GNOME Settings → System → Secure Shell can never enable `ssh.service`. The row itself stays visible (it is compiled into gnome-control-center with no visibility hook).
-- **Graphical login only.** No text consoles: `rootfs-overlay/etc/systemd/logind.conf.d/10-larch-no-vt.conf` sets `NAutoVTs=0`/`ReserveVT=0`, and `getty@tty1`/`autovt@` are masked via `/dev/null` symlinks in `rootfs-overlay/etc/systemd/system/`. No cron either (`cron` is in `config/remove.list`; systemd timers cover scheduling), and `clean-rootfs.sh` deletes dpkg's `dpkg-db-backup` timer along with dpkg.
-- **Minimal setuid set.** `config/remove-files.list` deletes `su`, `chfn`, `chsh`, `gpasswd`, `chage` (and their PAM files) and `gst-ptp-helper`; `clean-rootfs.sh` strips setuid from `mount`/`umount`. What stays privileged: `passwd`, `unix_chkpwd`, `dbus-daemon-launch-helper`, `fusermount3`, `newuidmap`/`newgidmap`, `nvidia-modprobe`.
+- **Graphical login only.** No text consoles: `rootfs-overlay/etc/systemd/logind.conf.d/10-larch-no-vt.conf` sets `NAutoVTs=0`/`ReserveVT=0`, and `getty@tty1`/`autovt@` are masked via `/dev/null` symlinks in `rootfs-overlay/etc/systemd/system/`. No cron either (no cron package is installed; systemd timers cover scheduling).
+- **Minimal setuid set.** `config/remove-files.list` deletes `su`, `pkexec`, `chfn`, `chsh`, `gpasswd`, `newgrp`/`sg`, `chage`/`expiry` (and their PAM files) and `gst-ptp-helper`; `clean-rootfs.sh` strips setuid from `mount`/`umount` and prints what is left to the build log. What stays privileged: `passwd`, `unix_chkpwd`, `polkit-agent-helper-1`, `dbus-daemon-launch-helper`, `fusermount3`, `newuidmap`/`newgidmap` (file capabilities), `nvidia-modprobe`.
 - **Core desktop only:** base GNOME (Wayland), **Nautilus** as the file manager, and **GNOME Terminal**. Nothing beyond the minimal desktop ships in the core image.
-- **No package manager.** Software is installed solely via the **`flatpak` CLI** against Flathub. The base OS cannot be modified by the user; only Flatpak apps and `/home` change. **AppImages** also run from `/home`: the image ships `libfuse2t64` (the classic type-2 runtime's `libfuse.so.2`) and fuse3's setuid `fusermount`/`fusermount3`; desktop integration is left to Flathub's Gear Lever. **Rootless containers** (Podman) are user-installed too — a static build under `~/.local`; the image only ships `uidmap` (setuid `newuidmap`/`newgidmap`, which can't live in `/home`) so the user's `/etc/subuid`/`/etc/subgid` range can be mapped. Container root is the user's own UID, never host root.
+- **No package manager.** Software is installed solely via the **`flatpak` CLI** against Flathub. The base OS cannot be modified by the user; only Flatpak apps and `/home` change. **AppImages** also run from `/home`: the image ships `fuse2` (the classic type-2 runtime's `libfuse.so.2`) and fuse3's setuid `fusermount3`; desktop integration is left to Flathub's Gear Lever. **Rootless containers** (Podman) are user-installed too — a static build under `~/.local`; the image only ships `newuidmap`/`newgidmap` (from `shadow`, with file capabilities — they can't live in `/home`) so the user's `/etc/subuid`/`/etc/subgid` range can be mapped. Container root is the user's own UID, never host root.
 
 When implementing features, default to the most minimal, opinionated, immutable option consistent with these principles. Anything that would let the user mutate the base OS, add a second user, or hand-configure networking runs against the project's intent.
 
@@ -59,13 +59,13 @@ shared/
   udhcpc.script
 system/
   build.sh              the system build (9 stages) → output/system/
-  config/               packages.list, remove.list, remove-files.list, squashfs.exclude
-  config/               (base lists — no desktop packages)
+  config/               packages.list, remove.list, remove-files.list, squashfs.exclude (base lists —
+                        no desktop packages), arch-snapshot (YYYY/MM/DD), pacman.conf (the build's)
   rootfs-overlay/       base files copied verbatim into the base rootfs (stage 3)
   scripts/              setup-chroot.sh (base, stage 4), setup-desktop.sh + clean-rootfs.sh (per desktop, stage 5) — run inside the chroot
   desktops/<desktop>/   packages.list (required), setup.sh (must enable a display manager),
                         rootfs-overlay/, remove.list, remove-files.list (optional, appended to the base's)
-                        e.g. desktops/gnome/: GNOME + GDM, gdm3/custom.conf, 61-gdm.rules, gschema override
+                        e.g. desktops/gnome/: GNOME + GDM, gdm/custom.conf, gschema override
   bootloader/           loader.conf + entries/ — published as the release file loader.tar (stage 9)
   initramfs/sys/init    sys.initramfs PID 1
   initramfs/updater/init  updater.initramfs PID 1
@@ -112,7 +112,7 @@ make all | system | installer | clean | test-qemu | test-qemu-local
 | `installer/install.sh`, `installer/lib/`, `installer/initramfs/`, `shared/lib/` | `./docker-build.sh installer` |
 | `installer/grub.cfg` | `./docker-build.sh installer --stage 3` |
 
-Stage 9 (vmlinuz, `BOOTX64.EFI`, `loader.tar`, `SHA256SUMS`) must follow any of stages 6–8 for a consistent `output/system/`; it only includes the desktops of this run and deletes other `sys-*.squashfs` (they may be for another kernel). The base (`work/rootfs`) keeps apt — stage 5 cleans the per-desktop copies in `work/desktops/<desktop>/` — so any stage can be re-run.
+Stage 9 (vmlinuz, `BOOTX64.EFI`, `loader.tar`, `SHA256SUMS`) must follow any of stages 6–8 for a consistent `output/system/`; it only includes the desktops of this run and deletes other `sys-*.squashfs` (they may be for another kernel). The base (`work/rootfs`) keeps pacman — stage 5 cleans the per-desktop copies in `work/desktops/<desktop>/` — so any stage can be re-run.
 
 ### Test in QEMU
 
@@ -130,14 +130,14 @@ QEMU comes from host packages (`sudo make install-deps`) or a QEMU AppImage (`$Q
 ### System build (`system/build.sh`)
 
 1. **check-deps**
-2. **debootstrap** — `work/rootfs/` from Debian Trixie; skipped if `work/rootfs/usr/` exists
+2. **bootstrap** — the builder's pacman installs `base` into `work/rootfs/` from the Arch Linux Archive snapshot in `config/arch-snapshot` (`LARCH_ARCH_SNAPSHOT` / `LARCH_ARCH_MIRROR` override it) and writes it as the rootfs's `/etc/pacman.conf`, so stages 4–5 use the same snapshot; skipped if `work/rootfs/usr/` exists. To move to newer packages: bump the date, `--clean`, rebuild
 3. **base-overlay** — `copy_overlay rootfs-overlay` (`cp -a` + `chmod go-w`)
-4. **base-configure** — bind-mounts proc/sys/dev (`/dev` with `--rbind` — under rootless Podman a plain `--bind` exposes placeholder files instead of device nodes), runs `scripts/setup-chroot.sh` in the base: `packages.list` incl. `linux-image-amd64`/`linux-headers-amd64` (DKMS builds nvidia and broadcom-sta), the default user, shared services, and the iwlwifi firmware trim (here, so the initramfs firmware is trimmed too). The base is never cleaned.
-5. **desktops** — per desktop: `rsync -aHAX --delete` the base → `work/desktops/<desktop>/`; `scripts/setup-desktop.sh` holds the kernel packages, installs the desktop's `packages.list`, runs its `setup.sh`, and requires a `display-manager.service`; then the desktop's `rootfs-overlay/` (after the packages, so no conffile prompts); then `clean-rootfs.sh` with the base + desktop remove lists (apt, compiler, headers, perl, initramfs-tools, …; `systemd-update-done` last).
-6. **make-squashfs** — per desktop: empty `/etc/machine-id`, `/usr/lib/larch/version` and `/usr/lib/larch/desktop`, `mksquashfs … -comp zstd -Xcompression-level 19 -ef config/squashfs.exclude` → `output/system/sys-<desktop>.squashfs` (`/boot` excluded: the kernel ships separately)
+4. **base-configure** — bind-mounts proc/sys/dev (`/dev` with `--rbind` — under rootless Podman a plain `--bind` exposes placeholder files instead of device nodes), runs `scripts/setup-chroot.sh` in the base: the pacman keyring, mkinitcpio's pacman hooks disabled (`/dev/null` links in `/etc/pacman.d/hooks`), `packages.list` incl. `linux`/`linux-headers` (DKMS builds broadcom-wl), **NVIDIA 550** built with makepkg from the AUR's `nvidia-550xx-dkms` at a pinned commit (`NVIDIA_AUR_COMMIT`; Arch's own nvidia is 590+, which dropped Pascal) as a throwaway user, a check that DKMS built `nvidia*.ko` and `wl.ko` for the kernel, the default user, every service enabled explicitly (Arch enables nothing on install), and the iwlwifi firmware trim (here, so the initramfs firmware is trimmed too). pacman runs with `--overwrite '/etc/*'` and the base overlay is copied again afterwards. The base is never cleaned and keeps its sync databases.
+5. **desktops** — per desktop: `rsync -aHAX --delete` the base → `work/desktops/<desktop>/`; `scripts/setup-desktop.sh` installs the desktop's `packages.list` from the base's sync databases (not refreshed: same snapshot, no partial upgrade; `--ignore linux,linux-headers`), runs its `setup.sh`, and requires a `display-manager.service`; then the base's and the desktop's `rootfs-overlay/` (after the packages); then `clean-rootfs.sh` with the base + desktop remove lists — one `pacman -Rddn --noscriptlet` with **every pacman hook disabled** (removing `linux-headers` would otherwise fire DKMS's remove hook and delete the built modules), then pacman's own files; `systemd-update-done` last.
+6. **make-squashfs** — per desktop: empty `/etc/machine-id`, `/usr/lib/larch/version` and `/usr/lib/larch/desktop`, `mksquashfs … -comp zstd -Xcompression-level 19 -ef config/squashfs.exclude` → `output/system/sys-<desktop>.squashfs` (`/boot` and `usr/lib/modules/*/vmlinuz` excluded: the kernel ships separately)
 7. **sys-initramfs** — `MODS_BASE` + `MODS_DISK` + `MODS_INPUT` (+ their firmware), `e2fsck` → `sys.initramfs`
 8. **updater-initramfs** — also `MODS_NET` (same drivers as the installer) + firmware, curl/wpa_supplicant/udhcpc, dialog, `update.sh` → `updater.initramfs`
-9. **release-files** — `vmlinuz` from the base's `/boot`, `BOOTX64.EFI` (the base's `systemd-bootx64.efi`: `systemd-boot-efi` is listed explicitly, since apt otherwise picks the signed variant that only ships `.efi.signed`; `remove.list` purges systemd-boot from the images), `loader.tar` from `bootloader/`, a check that every image has modules for that kernel, `SHA256SUMS`
+9. **release-files** — `vmlinuz` from the base's `/usr/lib/modules/<ver>/vmlinuz`, `BOOTX64.EFI` (the base's `systemd-bootx64.efi`, part of Arch's systemd; `remove-files.list` deletes systemd-boot from the images), `loader.tar` from `bootloader/`, a check that every image has modules for that kernel, `SHA256SUMS`
 
 ### Installer build (`installer/build.sh`)
 
@@ -146,7 +146,7 @@ Needs the base `work/rootfs` (system stages 2–4). 1 **check-deps** · 2 **inst
 ### How an initramfs is built (`shared/build-lib.sh`)
 
 - `init_initramfs_tree`: busybox from the rootfs with **all** its applets linked in `/bin`, kmod's `modprobe` at `/usr/sbin/modprobe`, the init, `shared/lib/*.sh` → `/usr/lib/larch/`, `/etc/mtab` → `/proc/mounts`.
-- `bundle_modules <dir> <firmware 0|1> <regex>…`: every module whose `modules.dep` path matches, with its dependencies, **kept compressed** (`.ko.xz`; kmod loads them, busybox's modprobe can't), all `modules.*` indexes, the image's `modprobe.d`; with firmware, everything the modules declare via `modinfo -F firmware` plus regulatory.db/brcm extras. Module sets: `MODS_BASE` (squashfs, overlay, ext4, fat/nls, isofs, crypto, lib, qemu_fw_cfg), `MODS_DISK` (**every** disk-driver directory of the larch OS kernel: ata, block, cdrom, md, memstick, message, mmc, nvdimm, nvme, scsi, ufs, virtio, hv, xen, firewire, thunderbolt, pci/controller, usb host/storage), `MODS_INPUT` (hid, input, i2c, mfd, pinctrl), `MODS_NET` (all of drivers/net, wireless stacks, rfkill, packet, wl). The installer and updater carry the identical set (`MODS_DISK` + `MODS_NET`, with firmware); sys.initramfs the same `MODS_DISK` (with firmware), no network. Don't hand-pick drivers out of these directories.
+- `bundle_modules <dir> <firmware 0|1> <regex>…`: every module whose `modules.dep` path matches, with its dependencies, **kept compressed** (`.ko.zst`; kmod loads them, busybox's modprobe can't), all `modules.*` indexes, the image's `modprobe.d`; with firmware, everything the modules declare via `modinfo -F firmware` plus regulatory.db/brcm extras. Module sets: `MODS_BASE` (squashfs, overlay, ext4, fat/nls, isofs, crypto, lib, qemu_fw_cfg), `MODS_DISK` (**every** disk-driver directory of the larch OS kernel: ata, block, cdrom, md, memstick, message, mmc, nvdimm, nvme, scsi, ufs, virtio, hv, xen, firewire, thunderbolt, pci/controller, usb host/storage), `MODS_INPUT` (hid, input, i2c, mfd, pinctrl), `MODS_NET` (all of drivers/net, wireless stacks, rfkill, packet, wl). The installer and updater carry the identical set (`MODS_DISK` + `MODS_NET`, with firmware); sys.initramfs the same `MODS_DISK` (with firmware), no network. Don't hand-pick drivers out of these directories.
 - `copy_bin_with_libs`: a rootfs binary + its libraries via `chroot ldd`. Busybox's shell runs applets before PATH, so call copied tools that shadow an applet by absolute path (`/usr/sbin/modprobe`, `/usr/sbin/e2fsck`).
 - Every initramfs is built for the rootfs's kernel, so it only works with that release's `vmlinuz` — `hw.sh load_drivers` refuses to run otherwise.
 
@@ -191,15 +191,17 @@ GitHub's releases API JSON (no jq) is split at each release's own `"url":".../re
 
 ### Image trimming
 
-`system/config/remove.list` purges the toolchain, kernel headers, perl (`perl-base` stays), onnxruntime, SANE, initramfs-tools, desktop-base, cron; `remove-files.list` deletes the package manager, setuid tools, Mesa's Asahi/Freedreno Vulkan drivers and firmware for routers/ARM SoCs/server NICs (`ti/` and `nxp/` kept deliberately); `clean-rootfs.sh` drops every iwlwifi `.ucode` except the highest API ≤ the kernel's maximum per chip (read via `modinfo`).
+pacman never installs optional dependencies, so little arrives that isn't wanted (Mesa's Vulkan drivers are split per vendor: only radeon/intel/nouveau are listed). `system/config/remove.list` removes the toolchain (base-devel, git, dkms, kernel headers), sudo, mkinitcpio and pacman's helpers (perl stays: foomatic and HPLIP need it); `remove-files.list` deletes pacman/makepkg, systemd-boot, NVIDIA's X.Org bits, docs, setuid tools and firmware for routers/ARM SoCs/server NICs (`ti/` and `nxp/` kept deliberately); `setup-chroot.sh` drops every iwlwifi `.ucode.zst` except the highest API ≤ the kernel's maximum per chip (read via `modinfo`).
 
 ### Time, language, misc
 
-Time and timezone are automatic: `systemd-timesyncd`, and (GNOME) `desktops/gnome/rootfs-overlay/usr/share/glib-2.0/schemas/90_larch.gschema.override` turns on `automatic-timezone` and Location Services (gsd-datetime via geoclue). `99-larch-datetime.rules` lets the active local session call timedated; `99-larch-cups.rules` grants cups-pk-helper's actions; `99-larch-flatpak.rules` likewise for Flatpak. The image compiles every locale in `/usr/share/i18n/SUPPORTED`; the user's language/avatar persist in `/var/lib/AccountsService` via the `/var` overlay.
+Time and timezone are automatic: `systemd-timesyncd`, and (GNOME) `desktops/gnome/rootfs-overlay/usr/share/glib-2.0/schemas/90_larch.gschema.override` turns on `automatic-timezone` and Location Services (gsd-datetime via geoclue). `99-larch-datetime.rules` lets the active local session call timedated; `99-larch-cups.rules` grants cups-pk-helper's actions; `99-larch-flatpak.rules` likewise for Flatpak. The image compiles every locale Arch's `/etc/locale.gen` lists; the user's language/avatar persist in `/var/lib/AccountsService` via the `/var` overlay.
 
 ## Common customisation patterns
 
-- **Add a package:** `system/config/packages.list`, then `system --stage 4`
+- **Add a package:** `system/config/packages.list` (an Arch repo name — AUR packages need a makepkg step like NVIDIA's in `setup-chroot.sh`), then `system --stage 4`
+- **Move to newer Arch packages:** bump `system/config/arch-snapshot`, then `./docker-build.sh --clean` and a full build (the base must come from one snapshot)
+- **Change the NVIDIA driver:** `NVIDIA_AUR_PKG`/`NVIDIA_AUR_COMMIT` in `system/scripts/setup-chroot.sh`; check the AUR package's patches cover the snapshot's kernel
 - **Add a system config file:** drop it in `system/rootfs-overlay/` (every desktop) or `system/desktops/<desktop>/rootfs-overlay/` mirroring its final path, then `system --stage 3` / `--stage 5`
 - **Add a desktop:** `system/desktops/<name>/` (lowercase `[a-z0-9]`) with `packages.list` and a `setup.sh` that enables its display manager; the next system build ships `sys-<name>.squashfs` and the menus offer `larch-<name>-<tag>`
 - **Need a driver in an initramfs:** widen the module-set regexes in `shared/build-lib.sh` (and the explicit list in `hw.sh load_drivers` if nothing autoloads it by modalias)

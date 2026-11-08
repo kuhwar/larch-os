@@ -8,7 +8,7 @@
 # firmware. Nothing is read from LARCHSYS for drivers, so the updater still
 # works when LARCHSYS is broken.
 
-KMOD=/usr/sbin/modprobe   # kmod's (handles .ko.xz); busybox's applet can't
+KMOD=/usr/sbin/modprobe   # kmod's (handles .ko.zst); busybox's applet can't
 
 # Kernel names (sda2, nvme0n1p2) of partitions whose GPT name is <name>.
 # No udev here, so no /dev/disk/by-partlabel; the kernel's uevent has it.

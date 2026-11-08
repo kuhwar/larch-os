@@ -1,127 +1,59 @@
-# Packages purged from the rootfs AFTER configuration, before squashfs (stage 5,
-# scripts/clean-rootfs.sh: one `dpkg --purge --force-depends` while dpkg is
-# still present; dpkg itself is wiped right after via remove-files.list).
+# Packages removed from each desktop's rootfs AFTER configuration, before
+# squashfs (stage 5, scripts/clean-rootfs.sh: one `pacman -Rddn --noscriptlet`
+# with every pacman hook disabled; pacman itself is wiped right after via
+# remove-files.list).
 #
 # One package per line; # comments and blank lines are ignored.
-#   - Shell globs are allowed (dpkg-query patterns): names that carry versions
-#     (gcc-14, libperl5.42, linux-headers-6.12…) change with each release/kernel.
+#   - Shell globs are allowed (matched against `pacman -Qq`).
 #   - A line starting with ! keeps the packages it matches, even if another
 #     line matched them.
 #   - Names/globs that match nothing installed are ignored.
 # For files that belong to packages that must stay, see remove-files.list.
+#
+# Much shorter than Debian's: pacman never installs optional dependencies, so
+# SANE (colord-sane), onnxruntime, desktop branding, cron, … never arrive.
 
-apt
-apt-utils
-apt-transport-https
-aptitude
-debconf-utils
-python3-apt
-python3-debian
-dpkg-dev
-debianutils
-tasksel
-tasksel-data
+# ── Package manager helpers (pacman's own files: remove-files.list) ──────────
+pacman-mirrorlist
+archlinux-keyring
 
 # No privilege escalation on the immutable OS — root is locked and there is no
-# admin path; updates happen from install/upgrade media, not in-session.
+# admin path. (base-devel pulls sudo in for the AUR build.)
 sudo
 
-# DKMS build toolchain — needed only in stage 4 to compile broadcom-sta (wl.ko)
-# and nvidia-kernel-dkms. The built .ko files stay in /lib/modules/*/updates/dkms;
-# the compiler itself (~100 MB) has no use on an immutable OS.
+# ── Build toolchain ──────────────────────────────────────────────────────────
+# Needed only at stage 4: DKMS (nvidia-550xx-dkms, broadcom-wl-dkms) and the
+# AUR build (base-devel, git, patchelf). The built .ko files stay in
+# /usr/lib/modules/*/updates/dkms.
+base-devel
 dkms
+gcc
 make
 patch
-fakeroot
-libfakeroot
-libdpkg-perl
-gcc
-gcc-[0-9]*
-gcc-x86-64-linux-gnu
-cpp
-cpp-[0-9]*
-cpp-x86-64-linux-gnu
-libgcc-[0-9]*-dev
-libasan[0-9]*
-libtsan[0-9]*
-liblsan[0-9]*
-libubsan[0-9]*
-libhwasan[0-9]*
-libitm[0-9]*
-libcc1-[0-9]*
-libisl[0-9]*
-libmpc[0-9]*
+autoconf
+automake
 binutils
-binutils-common
-binutils-x86-64-linux-gnu
-libbinutils
-libctf0
-libctf-nobfd0
-libsframe[0-9]*
-libgprofng[0-9]*
-libc6-dev
-libc-dev-bin
-linux-libc-dev
-libcrypt-dev
-rpcsvc-proto
-# The kernel's headers (DKMS built against them) and Debian's kbuild, if any.
-linux-headers-*
-linux-kbuild-*
-# gcc-<N>-base is runtime: libgcc-s1 / libstdc++6 depend on it.
-!gcc-*-base
+bison
+debugedit
+fakeroot
+flex
+m4
+libtool
+pkgconf
+texinfo
+groff
+git
+patchelf
+linux-headers
+# gcc's runtime libraries (libgcc_s, libstdc++) are separate packages.
+!gcc-libs
+!libgcc
+!libstdc++
 
-# Full perl (~49 MB raw). Every perl script left in the image is a packaging/
-# admin tool (debconf, adduser, update-rc.d, ucf, linux-base); nothing at
-# runtime runs perl and nothing links libperl. perl-base (Essential,
-# /usr/bin/perl) stays.
-perl
-perl-modules-*
-libperl5*
+# mkinitcpio (the kernel's `initramfs` dependency). Every larch initramfs is
+# assembled by hand from busybox (shared/build-lib.sh); plymouth runs from the
+# real root. Its pacman hooks are disabled in setup-chroot.sh.
+mkinitcpio
+mkinitcpio-busybox
 
-# onnxruntime (~70 MB raw; matches nothing on trixie). From forky on,
-# libspa-0.2-modules depends on it for
-# PipeWire's ONNX filter-graph plugin (ML audio filters; the plugin itself is in
-# remove-files.list), which nothing in larch-os loads. Also the libraries only
-# onnxruntime uses: oneDNN, onnx, XNNPACK, pthreadpool, cpuinfo.
-# protobuf/abseil/re2 stay: other packages may link them.
-libonnxruntime*
-libonnx[0-9]*
-libdnnl[0-9]*
-libxnnpack[0-9]*
-libpthreadpool[0-9]*
-libcpuinfo[0-9]*
-
-# SANE scanner stack (~25 MB raw). Only colord depends on libsane1, for its
-# optional scanner colour-profiling helper (colord-sane + sensor plugin, in
-# remove-files.list); net-snmp is only there for SANE's magicolor backend.
-# GNOME's Document Scanner is a Flatpak that brings its own SANE.
-libsane1
-libsane-common
-libsnmp[0-9]*
-libsnmp-base
-
-# initramfs-tools (pulled in by the kernel and plymouth). Every larch initramfs
-# is assembled by hand from busybox (shared/build-lib.sh); plymouth runs from
-# the real root.
-initramfs-tools
-initramfs-tools-core
-klibc-utils
-libklibc
-
-# Debian branding themes (~17 MB). Its gschema override points the wallpaper at
-# a Debian theme; clean-rootfs.sh recompiles schemas afterwards so larch-os's
-# own wallpaper (90_larch.gschema.override) applies.
-desktop-base
-
-# cron (Debian "important" priority, pulled in by debootstrap). systemd timers
-# already cover logrotate/e2scrub, and user crontabs would only live in the
-# tmpfs /var until reboot — the setuid crontab is just a needless write path.
-cron
-cron-daemon-common
-
-# systemd-boot: the bootloader is a release file (stage 9 takes it from the
-# base); nothing in the running system installs or updates it.
-systemd-boot
-systemd-boot-efi
-systemd-boot-efi-amd64-signed
-systemd-boot-tools
+# perl stays: foomatic-db-engine and HPLIP (printing) run perl scripts.

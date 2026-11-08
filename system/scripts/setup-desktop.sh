@@ -5,21 +5,22 @@
 # with system/desktops/<desktop>/packages.list as /desktop-packages.list and,
 # if the desktop has one, its setup.sh as /desktop-setup.sh.
 #
-# The kernel stays the base's: every desktop image of a release must carry
-# modules for the one vmlinuz the release ships, so it is held here.
+# The sync databases are the base's (stage 4) and are not refreshed: the
+# desktop comes from the same Arch snapshot as the base, so nothing the base
+# has (the kernel above all — every desktop image must carry modules for the
+# one vmlinuz the release ships) is upgraded and there is no partial upgrade.
 
 set -euo pipefail
 
 log() { echo "  [desktop] $*"; }
-export DEBIAN_FRONTEND=noninteractive
-
-apt-mark hold 'linux-image-*' 'linux-headers-*' >/dev/null 2>&1 || true
-apt-get update -qq
 
 log "Installing desktop packages"
-PKGS=$(grep -v '^#' /desktop-packages.list | grep -v '^[[:space:]]*$' | tr '\n' ' ')
+PKGS=$(sed -e 's/#.*//' -e 's/[[:space:]]//g' /desktop-packages.list | grep -v '^$' | tr '\n' ' ')
+# --overwrite: a base rootfs-overlay file may sit where a package ships one;
+# build.sh copies both overlays again after this script.
 # shellcheck disable=SC2086
-apt-get install -y --no-install-recommends $PKGS
+pacman -S --needed --noconfirm --noprogressbar --ignore linux,linux-headers \
+    --overwrite '/etc/*' $PKGS
 
 if [ -f /desktop-setup.sh ]; then
     log "Running the desktop's setup.sh"
@@ -30,6 +31,5 @@ fi
 [ -L /etc/systemd/system/display-manager.service ] \
     || { echo "ERROR: the desktop enabled no display manager (display-manager.service)" >&2; exit 1; }
 
-apt-get clean
-rm -rf /var/lib/apt/lists/*
+rm -rf /var/cache/pacman/pkg/*
 log "Desktop setup complete"

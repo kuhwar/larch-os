@@ -16,7 +16,7 @@ info() { echo "  ▸ $*"; }
 die()  { echo "ERROR: $*" >&2; exit 1; }
 
 # ── Module sets (extended regexes over modules.dep paths) ────────────────────
-# Matched against "kernel/drivers/…/x.ko.xz"; each module's dependencies come
+# Matched against "kernel/drivers/…/x.ko.zst"; each module's dependencies come
 # along from modules.dep. Use [.] rather than \. (awk -v unescapes strings).
 #
 # Filesystems and the libraries/crypto they need, plus qemu_fw_cfg (lets
@@ -51,10 +51,11 @@ rootfs_kver() {
     echo "$k"
 }
 
+# Arch's kernel package keeps the image beside its modules; nothing copies it
+# to /boot (mkinitcpio's hooks are disabled, see setup-chroot.sh).
 find_vmlinuz() {
     local kver; kver=$(rootfs_kver)
-    if [ -f "$ROOTFS_DIR/boot/vmlinuz-$kver" ]; then echo "$ROOTFS_DIR/boot/vmlinuz-$kver"; return 0; fi
-    ls "$ROOTFS_DIR/boot/vmlinuz"* 2>/dev/null | sort -V | tail -1
+    echo "$ROOTFS_DIR/usr/lib/modules/$kver/vmlinuz"
 }
 
 copy_bin_with_libs() {
@@ -62,16 +63,25 @@ copy_bin_with_libs() {
     # its shared library dependencies resolved via the rootfs dynamic linker.
     local binary="$1" dst_root="$2"
 
+    # Arch's /usr/sbin is a symlink to bin, so tools are found in /usr/bin.
+    # The initramfs's /usr/sbin is a real directory (larch-install, …) and the
+    # scripts call tools that shadow a busybox applet by /usr/sbin path
+    # (/usr/sbin/modprobe, /usr/sbin/e2fsck), so each gets a link there too.
     local src
-    src=$(find "$ROOTFS_DIR/usr/sbin" "$ROOTFS_DIR/usr/bin" \
-               -name "$binary" 2>/dev/null | head -1)
+    src=$(find "$ROOTFS_DIR/usr/bin/" "$ROOTFS_DIR/usr/sbin/" \
+               -maxdepth 1 -name "$binary" 2>/dev/null | head -1)
     [ -n "$src" ] || die "Binary '$binary' not found in larch OS rootfs"
 
     local rel="${src#$ROOTFS_DIR}"
+    rel="${rel//\/\//\/}"
     install -D "$src" "$dst_root$rel"
+    case "$rel" in
+        /usr/bin/*) mkdir -p "$dst_root/usr/sbin"
+                    ln -sf "$rel" "$dst_root/usr/sbin/$binary" ;;
+    esac
     info "  [bin] $binary → $rel"
 
-    # The dynamic linker. All Debian amd64 binaries name
+    # The dynamic linker. All x86-64 glibc binaries name
     # /lib64/ld-linux-x86-64.so.2 as their interpreter; in the initramfs /lib64
     # is a real directory, so put the symlink inside it explicitly.
     local ldso_src ldso_rel
@@ -101,7 +111,7 @@ copy_bin_with_libs() {
         real_rel="${real#$ROOTFS_DIR}"
         install -D "$real" "$dst_root$real_rel" 2>/dev/null || true
         # Soname symlink with an absolute target (the link and the file may be
-        # in different prefix dirs, /lib vs /usr/lib, on merged-usr Debian).
+        # in different directories).
         if [ "$libsrc" != "$real" ]; then
             mkdir -p "$(dirname "$dst_root$lib")"
             ln -sf "$real_rel" "$dst_root$lib" 2>/dev/null || true
@@ -111,7 +121,7 @@ copy_bin_with_libs() {
 
 # init_initramfs_tree <build_dir> <init_script>
 # The skeleton every larch initramfs starts from: busybox with all its applets
-# in /bin, kmod's modprobe (the rootfs's modules are .ko.xz, which busybox
+# in /bin, kmod's modprobe (the rootfs's modules are .ko.zst, which busybox
 # can't load), the init script and the shell libraries in /usr/lib/larch.
 init_initramfs_tree() {
     local build_dir="$1" init_src="$2" applet
@@ -119,7 +129,7 @@ init_initramfs_tree() {
     mkdir -p "$build_dir"/{bin,sbin,lib,lib64,usr/bin,usr/sbin,usr/lib/larch,dev,proc,sys,run,tmp,etc,mnt,sysroot}
 
     local busybox_bin="$ROOTFS_DIR/usr/bin/busybox"
-    [ -f "$busybox_bin" ] || die "busybox not found in the rootfs (busybox-static is in packages.list)"
+    [ -f "$busybox_bin" ] || die "busybox not found in the rootfs (busybox — statically linked on Arch — is in packages.list)"
     install -m 755 "$busybox_bin" "$build_dir/bin/busybox"
     for applet in $("$build_dir/bin/busybox" --list); do
         [ "$applet" = busybox ] || ln -sf busybox "$build_dir/bin/$applet"

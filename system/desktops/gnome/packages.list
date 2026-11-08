@@ -4,7 +4,7 @@
 
 # ── GNOME (Wayland) ─────────────────────────────────────────────────────────
 gnome-shell
-gdm3
+gdm
 gnome-session
 gnome-settings-daemon
 gnome-keyring
@@ -13,9 +13,15 @@ gnome-themes-extra
 adwaita-icon-theme
 nautilus
 gnome-terminal
+# gvfs includes the FUSE daemon on Arch; the backends are split out.
 gvfs
-gvfs-backends
-gvfs-fuse
+gvfs-smb
+gvfs-mtp
+gvfs-gphoto2
+gvfs-afc
+gvfs-nfs
+gvfs-dnssd
+gvfs-wsdd
 # No image viewer / PDF viewer / text editor in the core image — the core
 # desktop is Nautilus + GNOME Terminal only. Users get Loupe, Papers, Text
 # Editor etc. from Flathub.

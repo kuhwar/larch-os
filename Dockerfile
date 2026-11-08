@@ -1,8 +1,7 @@
 # larch-os builder image
 # Provides all host-side build dependencies.
 # The container must be run with --privileged because the build uses:
-#   - debootstrap (needs mknod to create /dev nodes in the chroot)
-#   - mount --bind (proc/sys/dev into the chroot)
+#   - mount --bind (proc/sys/dev into the rootfs) while pacman installs into it
 #   - chroot itself
 #
 # Usage (see docker-build.sh for a one-liner wrapper):
@@ -11,39 +10,32 @@
 #       -v "$(pwd)/output:/output" \
 #       larch-os-builder
 
-FROM debian:trixie-slim
+FROM docker.io/library/archlinux:base
 
-# Install all build-time tools in one layer
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    # rootfs bootstrap
-    debootstrap \
+# The builder's pacman bootstraps the rootfs (system stage 2) and checks its
+# package signatures against this keyring. The image's own pacman.conf
+# (NoExtract of docs, locales, …) applies only to the builder's packages; the
+# rootfs is installed with system/config/pacman.conf.
+RUN pacman-key --init && pacman-key --populate archlinux \
+ && pacman -Syu --noconfirm --needed \
     # squashfs compression
     squashfs-tools \
-    # ISO creation
-    xorriso \
-    # FAT image manipulation (for EFI boot image)
+    # ISO creation (xorriso) and the GRUB EFI image's FAT filesystem
+    libisoburn \
     mtools \
     dosfstools \
-    # GPT partitioning (needed by installer, not build)
-    gdisk \
-    # systemd-boot EFI binary (for installed-to-disk systems)
-    systemd-boot \
     # GRUB2 (UEFI only) — used for ISO/live boot (has ISO9660 driver; systemd-boot does not)
-    grub-common \
-    grub-efi-amd64-bin \
+    grub \
     # initramfs packing
     cpio \
     gzip \
-    # misc utilities used by the build pipeline (docker-entrypoint.sh)
+    # misc utilities used by the build pipeline
     ca-certificates \
     curl \
     rsync \
-    # busybox-static for initramfs
-    busybox-static \
-    # xz-utils / zstd to decompress .ko.xz / .ko.zst modules for busybox modprobe
-    xz-utils \
+    xz \
     zstd \
-  && rm -rf /var/lib/apt/lists/*
+ && pacman -Scc --noconfirm
 
 WORKDIR /build
 

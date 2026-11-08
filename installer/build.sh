@@ -1,7 +1,7 @@
 #!/bin/bash
 # installer/build.sh — build the Larch OS installer ISO (runs inside the builder)
 #
-# The ISO holds only the installer: GRUB, Debian's kernel and
+# The ISO holds only the installer: GRUB, the system's (Arch) kernel and
 # installer.initramfs. No system files — the installer downloads the system
 # release and desktop the user picks. The kernel, drivers, firmware and tools all come from the
 # system's base rootfs, so this needs work/rootfs from system stages 2-4
@@ -42,7 +42,7 @@ run_stage 1 "check-deps" && {
     for cmd in xorriso grub-mkrescue cpio find gzip; do
         command -v "$cmd" &>/dev/null || MISSING+=("$cmd")
     done
-    [ -f "$GRUB_EFI_DIR/modinfo.sh" ] || MISSING+=("grub-efi-amd64-bin (GRUB x86_64-efi platform)")
+    [ -f "$GRUB_EFI_DIR/modinfo.sh" ] || MISSING+=("grub (GRUB x86_64-efi platform)")
     if [ "${#MISSING[@]}" -gt 0 ]; then
         printf 'Missing build tools in the builder image: %s\n' "${MISSING[*]}" >&2
         exit 1
