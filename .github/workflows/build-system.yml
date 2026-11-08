@@ -66,4 +66,6 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          # never take "Latest" from the installer release
+          make_latest: 'false'
           files: output/system/*

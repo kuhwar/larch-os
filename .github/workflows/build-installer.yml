@@ -49,6 +49,8 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          # the installer is what new users start from: always "Latest"
+          make_latest: 'true'
           files: |
             output/larch-installer.iso
             output/larch-installer.iso.sha256
