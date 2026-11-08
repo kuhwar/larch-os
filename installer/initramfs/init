@@ -1,0 +1,33 @@
+#!/bin/sh
+# larch-os installer.initramfs init — PID 1 on the installer ISO
+#
+# GRUB boots the ISO's kernel with this initramfs. Everything the installer
+# needs is in here — its own storage, network and input drivers and firmware
+# (installer/build.sh), the tools, and the installer itself. The ISO carries
+# no system files: the installer downloads the Larch OS release and desktop
+# the user picks.
+#
+# No switch_root: the installer runs to completion from this initramfs, then
+# reboots.
+set -e
+
+log() { echo "[larch-install-init] $*" > /dev/console; }
+
+mount -t proc     proc     /proc
+mount -t sysfs    sysfs    /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts 2>/dev/null || true
+mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run
+
+log "larch-os installer starting"
+
+# setsid gives the installer its own session so it gets a controlling
+# terminal (without one, reads get no keyboard input on real hardware). If it
+# ever returns, reboot rather than let PID 1 exit (kernel panic).
+setsid cttyhack sh /usr/sbin/larch-install || true
+log "installer exited — rebooting"
+sync
+echo b > /proc/sysrq-trigger 2>/dev/null || true
+reboot -f
+while true; do sleep 60; done

@@ -68,8 +68,9 @@ form_config() {
 # ("Jane Doe" -> janedoe). Common accented Latin letters are folded to
 # ASCII first (sed works byte-wise on the UTF-8 sequences, so each is listed
 # literally). The result matches Debian's ^[a-z][a-z0-9]*$, capped at 32 chars.
-# Names already used by the image's system accounts/groups (reserved-names,
-# generated at build time) get a numeric suffix: "Root" -> root1.
+# Names already used by the image's system accounts/groups ($RESERVED_NAMES:
+# generated at build time, and again from the downloaded image before the
+# account is written) get a numeric suffix: "Root" -> root1.
 derive_username() {
     local _base _n
 
@@ -96,7 +97,7 @@ derive_username() {
 
     LARCH_USERNAME="$_base"
     _n=1
-    while grep -qx "$LARCH_USERNAME" /usr/lib/larch/reserved-names 2>/dev/null; do
+    while grep -qx "$LARCH_USERNAME" "${RESERVED_NAMES:-/usr/lib/larch/reserved-names}" 2>/dev/null; do
         LARCH_USERNAME="$_base$_n"
         _n=$((_n + 1))
     done

@@ -1,0 +1,95 @@
+#!/bin/sh
+# larch-os sys.initramfs init — PID 1 on every normal boot
+#
+# Booted by the "Larch OS" systemd-boot entry with LARCHEFI:/larch-os/vmlinuz.
+# Assembles the root and hands over to systemd:
+#
+#   1. Load the bundled storage/input/filesystem drivers (shared/lib/hw.sh).
+#   2. Find LARCHSYS by GPT name; LARCHCONF is the one on the same disk.
+#   3. Mount LARCHSYS (ext4) read-only and loop-mount its sys.squashfs as the
+#      root, read-only — identical on every install.
+#   4. fsck and mount LARCHCONF at /conf, then overlay /etc and /var with
+#      their upper layers on it (conf/etc, conf/var), so PID 1 starts with
+#      this machine's /etc: hostname, machine-id, accounts, units enabled at
+#      runtime.
+#   5. Move /dev, /proc, /sys and /run (with LARCHSYS mounted below it, at
+#      /run/larch/sys) into the new root and switch_root to systemd.
+#
+# /etc/fstab lists /conf, /etc and /var too (already mounted here), so systemd
+# orders their unmounting at shutdown; /home and the tmpfs mounts are its own.
+set -e
+
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+RUN=/run/larch
+SYS_MNT=$RUN/sys
+NEWROOT=/sysroot
+
+mount -t proc     proc     /proc
+mount -t sysfs    sysfs    /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run
+mkdir -p "$RUN" "$SYS_MNT"
+
+log() { echo "<6>larch-sys: $*" > /dev/kmsg 2>/dev/null || true; }
+die() {
+    echo "larch: $*" > /dev/console
+    echo "larch: the system can't start. Reboot and pick \"Update LARCH\" in the boot menu to reinstall the system files." > /dev/console
+    echo "larch: dropping to a shell (type 'reboot -f' to restart)." > /dev/console
+    exec setsid cttyhack sh < /dev/console > /dev/console 2>&1
+}
+
+. /usr/lib/larch/hw.sh
+
+log "loading drivers"
+load_drivers 1 || die "Could not load the drivers."
+wait_for_part LARCHSYS 30 || die "No Larch OS system partition (LARCHSYS) found."
+
+set -- $(parts_named LARCHSYS)
+SYS_PART="$1"
+[ "$#" -eq 1 ] || log "more than one LARCHSYS; using /dev/$SYS_PART"
+DISK=$(parent_disk "$SYS_PART")
+CONF_PART=$(part_on_disk "$DISK" LARCHCONF) || die "No LARCHCONF partition on /dev/$DISK."
+log "system /dev/$SYS_PART, config /dev/$CONF_PART"
+
+# ── Root: sys.squashfs on LARCHSYS ───────────────────────────────────────────
+mount -t ext4 -o ro "/dev/$SYS_PART" "$SYS_MNT" || die "Could not mount /dev/$SYS_PART."
+[ -f "$SYS_MNT/sys.squashfs" ] || die "/dev/$SYS_PART has no sys.squashfs."
+mount -t squashfs -o ro,loop "$SYS_MNT/sys.squashfs" "$NEWROOT" \
+    || die "Could not mount sys.squashfs."
+# The kernel and this initramfs on LARCHEFI and the image on LARCHSYS are
+# replaced together by the updater; if they don't match (an update was cut
+# off between the two), the system's modules won't load.
+[ -d "$NEWROOT/usr/lib/modules/$(uname -r)" ] \
+    || die "sys.squashfs has no modules for the running kernel $(uname -r)."
+
+# ── /conf, /etc, /var ────────────────────────────────────────────────────────
+fsck_ext4 "$CONF_PART" || log "fsck of /dev/$CONF_PART reported errors"
+mount -t ext4 -o rw,relatime "/dev/$CONF_PART" "$NEWROOT/conf" \
+    || die "Could not mount the config partition /dev/$CONF_PART."
+# A desktop switch the updater couldn't finish (shared/lib/conf.sh
+# swap_layers renames etc.new → etc, then var.new → var): complete it. While
+# etc.new is still there next to etc, the swap hadn't started — leave it.
+_c="$NEWROOT/conf"
+if [ ! -d "$_c/etc" ] && [ -d "$_c/etc.new" ]; then
+    log "finishing an interrupted desktop switch (/etc)"
+    mv "$_c/etc.new" "$_c/etc"
+fi
+if [ ! -d "$_c/etc.new" ] && [ -d "$_c/var.new" ]; then
+    log "finishing an interrupted desktop switch (/var)"
+    [ ! -d "$_c/var" ] || mv "$_c/var" "$_c/var.old"
+    mv "$_c/var.new" "$_c/var"
+fi
+rm -rf "$_c/etc.old" "$_c/var.old"
+for _d in etc var; do
+    mkdir -p "$NEWROOT/conf/$_d" "$NEWROOT/conf/$_d-work"
+    mount -t overlay overlay \
+        -o "lowerdir=$NEWROOT/$_d,upperdir=$NEWROOT/conf/$_d,workdir=$NEWROOT/conf/$_d-work" \
+        "$NEWROOT/$_d" || die "Could not mount the /$_d overlay."
+done
+
+# ── Hand over to systemd ─────────────────────────────────────────────────────
+log "switching to the system"
+for _m in dev proc sys run; do
+    mount --move "/$_m" "$NEWROOT/$_m"
+done
+exec switch_root "$NEWROOT" /lib/systemd/systemd

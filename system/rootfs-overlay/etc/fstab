@@ -1,0 +1,34 @@
+# /etc/fstab — larch-os
+# Static and identical on every machine: partitions are found by label, so
+# nothing here is per-machine. /tmp is left to systemd's stock tmp.mount.
+#
+# The root is sys.squashfs on LARCHSYS, loop-mounted read-only by sys.initramfs
+# (system/initramfs/sys/init), which also mounts — before systemd starts —
+# LARCHCONF at /conf and the overlays on /etc and /var:
+#
+#   /etc = the image's /etc (read-only, lower) under LARCHCONF/etc (upper), so
+#          tools that replace files by rename (passwd, usermod, timedated, …)
+#          work and their changes persist. The installer writes this machine's
+#          identity into the upper layer: hostname, hosts, machine-id and the
+#          account files. PID 1 starts with it already in place.
+#   /var = the same, over LARCHCONF/var: every service's state
+#          (NetworkManager, Bluetooth, AccountsService, journal, timers, …)
+#          persists, while image-owned files nobody has changed (catalogs,
+#          caches, the Flathub remote) come from whatever image is booted.
+#
+# Those three lines are listed here only so systemd knows them and orders
+# their unmounting at shutdown (overlays before /conf); they are already
+# mounted, and /conf has fsck pass 0 because sys.initramfs checks it.
+#
+# /var/tmp is tmpfs so unbounded temp files can't fill LARCHCONF. LARCHHOME
+# holds the user's home at /home/<username>. udisks mounts removable drives
+# under /media/<user>, which it must create, hence the tmpfs there. Every mount
+# point ships in the image (setup-chroot.sh), since nothing can be created on
+# the read-only root at boot.
+
+LABEL=LARCHCONF          /conf       ext4      defaults,relatime                              0  0
+overlay                  /etc        overlay   lowerdir=/etc,upperdir=/conf/etc,workdir=/conf/etc-work,x-systemd.requires-mounts-for=/conf  0  0
+overlay                  /var        overlay   lowerdir=/var,upperdir=/conf/var,workdir=/conf/var-work,x-systemd.requires-mounts-for=/conf  0  0
+tmpfs                    /var/tmp    tmpfs     mode=1777,nosuid,nodev,size=25%                0  0
+LABEL=LARCHHOME          /home       ext4      defaults,relatime,nofail                       0  2
+tmpfs                    /media      tmpfs     mode=0755,nosuid,nodev                         0  0

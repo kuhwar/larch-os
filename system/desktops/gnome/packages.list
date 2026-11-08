@@ -1,0 +1,24 @@
+# GNOME desktop — installed on top of the base (system/config/packages.list)
+# by scripts/setup-desktop.sh (system stage 5). Comments and blank lines are
+# ignored.
+
+# ── GNOME (Wayland) ─────────────────────────────────────────────────────────
+gnome-shell
+gdm3
+gnome-session
+gnome-settings-daemon
+gnome-keyring
+gnome-control-center
+gnome-themes-extra
+adwaita-icon-theme
+nautilus
+gnome-terminal
+gvfs
+gvfs-backends
+gvfs-fuse
+# No image viewer / PDF viewer / text editor in the core image — the core
+# desktop is Nautilus + GNOME Terminal only. Users get Loupe, Papers, Text
+# Editor etc. from Flathub.
+
+# ── Portal ───────────────────────────────────────────────────────────────────
+xdg-desktop-portal-gnome

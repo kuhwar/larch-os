@@ -1,40 +1,45 @@
 #!/bin/sh
 # installer/install.sh — larch-os disk installer
 #
-# Runs as PID 1's child in the installer initramfs (see initramfs/installer/init).
-# The init mounts the installer USB at /mnt/iso before calling this script, so all
-# OS files to be installed are available there:
-#   /mnt/iso/larch-os/rootfs.squashfs  — OS root filesystem (written raw onto LARCHSYS)
-#   /mnt/iso/larch-os/vmlinuz          — kernel (root-mount drivers built in)
-#   /mnt/iso/larch-os/update-initramfs.img — updater ("Update LARCH" boot entry)
-#   /mnt/iso/EFI/BOOT/BOOTX64.EFI     — systemd-boot
-#   /mnt/iso/loader/                   — bootloader config
+# Bundled into installer.initramfs as /usr/sbin/larch-install and run by its
+# init (installer/initramfs/init). The installer ISO carries no system files:
+# this downloads the Larch OS release and desktop the user picks
+# (shared/lib/release.sh) and installs it. Flow:
 #
-# Asks full name · password (the username is derived from the full name, the
-# hostname as <username>-<brand>-<device type>) and the target disk, then wipes
-# it and creates four partitions:
+#   1. Load the bundled storage/network/input drivers (shared/lib/hw.sh).
+#   2. Ask the full name and password (the username is derived from the full
+#      name, the hostname as <username>-<brand>-<device type>).
+#   3. Get online (wired DHCP, else Wi-Fi) and list the releases, one entry per
+#      desktop (larch-gnome-v0.1.5, larch-cosmic-v0.1.5, …), to pick from —
+#      before any disk is touched, so no network means nothing is erased.
+#   4. Ask the target disk and confirm, then wipe it and create four GPT
+#      partitions:
 #
-#   1. LARCHEFI  (FAT32) — systemd-boot, loader config, vmlinuz, and the
-#                          updater's initramfs. The system itself boots with no
-#                          initramfs: the kernel mounts LARCHSYS itself. The loader entries
-#                          carry this machine's id and hostname
-#                          (systemd.machine_id=, systemd.hostname=).
-#   2. LARCHSYS  (squashfs) — rootfs.squashfs written byte-for-byte onto the
-#                          partition; identical on every install.
-#   3. LARCHCONF (ext4)  — /conf: etc/ + etc-work/, the upper layer of the
-#                          overlay on /etc, starting with this machine's
-#                          hostname, hosts, machine-id and account files; and
-#                          var/ + var-work/, the (initially empty) upper layer
-#                          of the overlay on /var.
-#   4. LARCHHOME (ext4)  — /home/<username>, seeded from /etc/skel.
+#        1. LARCHEFI  (FAT32) — systemd-boot and its entries, larch-os/vmlinuz,
+#                               larch-os/sys.initramfs, larch-os/updater.initramfs
+#        2. LARCHSYS  (ext4)  — sys.squashfs (the chosen desktop's OS root,
+#                               loop-mounted by sys.initramfs), version, desktop
+#        3. LARCHCONF (ext4)  — /conf: etc/ + etc-work/, the upper layer of the
+#                               /etc overlay, starting with this machine's
+#                               hostname, hosts, machine-id and account files;
+#                               var/ + var-work/, the upper layer of /var
+#        4. LARCHHOME (ext4)  — /home/<username>, seeded from the image's /etc/skel
+#
+#   5. Download the release onto LARCHSYS, verify it, install it, write the
+#      machine config, reboot.
 #
 # Every run is a clean install. Updates are done by the "Update LARCH" boot
-# entry (updater/update.sh), which rewrites LARCHSYS from a GitHub release.
+# entry (system/updater/update.sh), which replaces the same files.
 
-set -e
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
-export PATH=/usr/sbin:/sbin:/usr/bin:/bin
-
+DIALOG_BT="Larch OS installer"
+DIE_TITLE="Installation failed"
+. /usr/lib/larch/ui.sh
+. /usr/lib/larch/hw.sh
+. /usr/lib/larch/net.sh
+. /usr/lib/larch/release.sh
+. /usr/lib/larch/conf.sh
 . /usr/lib/larch/helpers.sh
 . /usr/lib/larch/disk.sh
 . /usr/lib/larch/config-form.sh
@@ -51,20 +56,22 @@ done
 
 [ "$(id -u)" -eq 0 ] || die "Must be run as root"
 
-# ── Verify installer medium ───────────────────────────────────────────────────
+# ── Drivers ──────────────────────────────────────────────────────────────────
 
-[ -f "$ISO_MOUNT/larch-os/rootfs.squashfs" ] || die "rootfs.squashfs not found on installer medium ($ISO_MOUNT/larch-os/rootfs.squashfs)"
-[ -f "$ISO_MOUNT/larch-os/vmlinuz" ]         || die "Kernel not found on installer medium"
-[ -f "$ISO_MOUNT/larch-os/update-initramfs.img" ] || die "Updater initramfs not found on installer medium"
-[ -f "$ISO_MOUNT/EFI/BOOT/BOOTX64.EFI" ]    || die "EFI binary not found on installer medium"
-[ -d "$ISO_MOUNT/loader" ]                   || die "Bootloader config not found on installer medium"
+echo "[larch-install] Loading drivers..." > /dev/console
+load_drivers
+wait_for_keyboard
 
-# ── Main install loop ─────────────────────────────────────────────────────────
+# ── Questions, network, release ──────────────────────────────────────────────
+
+form_config
+net_up
+lookup_releases
+choose_release "" "$(default_release)" Reboot
 
 while true; do
 
 [ -n "$TARGET_DISK" ] || pick_disk_dialog
-
 [ -b "$TARGET_DISK" ] || die "Not a block device: $TARGET_DISK"
 
 case "$TARGET_DISK" in
@@ -75,25 +82,24 @@ PART1="${TARGET_DISK}${_sep}1"; PART2="${TARGET_DISK}${_sep}2"
 PART3="${TARGET_DISK}${_sep}3"; PART4="${TARGET_DISK}${_sep}4"
 unset _sep
 
-form_config
-
-# ── Confirm ───────────────────────────────────────────────────────────────────
-
 if [ "$AUTO_YES" -ne 1 ]; then
-    dialog --colors --yes-label "Install" --no-label "Cancel" \
+    _dl=""
+    [ "$REL_SIZE" -gt 0 ] && _dl="  ($(( REL_SIZE / 1048576 )) MB download)"
+    dialog --colors --yes-label "Install" --no-label "Back" \
         --backtitle "$DIALOG_BT" --title " Confirm Installation " \
         --yesno "\
+  Larch OS         : $REL_NAME$_dl
   Full name        : $LARCH_FULLNAME
   Username         : $LARCH_USERNAME
   Hostname         : $LARCH_HOSTNAME
   Target disk      : $TARGET_DISK
   EFI partition    : $PART1  (FAT32, $EFI_PART_SIZE, LARCHEFI)
-  System partition : $PART2  (squashfs, $SYS_PART_SIZE, LARCHSYS)
+  System partition : $PART2  (ext4, $SYS_PART_SIZE, LARCHSYS)
   Config partition : $PART3  (ext4, $CONF_PART_SIZE, LARCHCONF)
   Home partition   : $PART4  (ext4, remainder, LARCHHOME)
 
   \Z1WARNING: ALL DATA ON $TARGET_DISK WILL BE DESTROYED.\Zn" \
-        18 70 \
+        19 72 \
         || { TARGET_DISK=""; continue; }
     clear_screen
 fi
@@ -101,17 +107,83 @@ fi
 break
 done
 
-# ── Generate config files ─────────────────────────────────────────────────────
+# ── Partition and format ─────────────────────────────────────────────────────
 
-CONFIG_TMP="/run/larch-config"
+show_step "Unmounting any existing partitions on $TARGET_DISK"
+for _p in "${TARGET_DISK}"[0-9]* "${TARGET_DISK}"p[0-9]*; do
+    [ -b "$_p" ] && umount "$_p" 2>/dev/null || true
+done
+unset _p
+
+show_step "Creating GPT partition table on $TARGET_DISK"
+wipefs -a "$TARGET_DISK" >/dev/null 2>&1
+# The GPT partition names are how sys.initramfs and the updater find them.
+printf 'label: gpt\nsize=%s, type=uefi, name=LARCHEFI\nsize=%s, type=linux, name=LARCHSYS\nsize=%s, type=linux, name=LARCHCONF\ntype=linux, name=LARCHHOME\n' \
+    "$EFI_PART_SIZE" "$SYS_PART_SIZE" "$CONF_PART_SIZE" | sfdisk -q "$TARGET_DISK" >/dev/null 2>&1 \
+    || die "Could not partition $TARGET_DISK."
+blockdev --rereadpt "$TARGET_DISK" 2>/dev/null || true
+
+i=0
+while [ $i -lt 15 ]; do
+    [ -b "$PART1" ] && [ -b "$PART2" ] && [ -b "$PART3" ] && [ -b "$PART4" ] && break
+    sleep 1; i=$((i+1))
+done
+for _p in "$PART1" "$PART2" "$PART3" "$PART4"; do
+    [ -b "$_p" ] || die "Partition $_p not found after partitioning"
+done
+unset _p
+
+show_step "Formatting partitions"
+mkfs.fat -F 32 -n LARCHEFI "$PART1" >/dev/null 2>&1      || die "Could not format $PART1."
+mkfs.ext4 -F -L LARCHSYS  -m 0 "$PART2" >/dev/null 2>&1  || die "Could not format $PART2."
+mkfs.ext4 -F -L LARCHCONF -m 0 "$PART3" >/dev/null 2>&1  || die "Could not format $PART3."
+mkfs.ext4 -F -L LARCHHOME -m 0 "$PART4" >/dev/null 2>&1  || die "Could not format $PART4."
+
+mount_or_die ext4 "$PART2" "$MOUNT_SYS"
+mount_or_die vfat "$PART1" "$MOUNT_EFI"
+
+# ── Download and install the system ──────────────────────────────────────────
+# The disk is already wiped, so a failed download offers a retry.
+
+while true; do
+    rm -rf "$STAGE"
+    download_release "$STAGE" && check_release "$STAGE" && break
+    umount "$NEW_MNT" 2>/dev/null || true
+    dialog --backtitle "$DIALOG_BT" --title " Download failed " \
+        --yes-label "Retry" --no-label "Reboot" \
+        --yesno "\n$REL_NAME could not be downloaded and verified.\n\n$TARGET_DISK has already been erased. Retry the download?" 11 70 \
+        || do_reboot
+done
+
+show_step "Installing $REL_NAME"
+mv -f "$STAGE/$SYS_IMG" "$MOUNT_SYS/sys.squashfs" || die "Could not install sys.squashfs."
+install_boot_files "$STAGE" "$MOUNT_EFI" || die "Could not install the kernel and bootloader on $PART1."
+printf '%s\n' "$NEW_VERSION" > "$MOUNT_SYS/version"
+printf '%s\n' "$REL_DESKTOP" > "$MOUNT_SYS/desktop"
+rm -rf "$STAGE"
+sync
+umount "$MOUNT_EFI"
+
+# The image (still mounted at $NEW_MNT by check_release) is where the
+# identity files and the account names in use come from, and its /etc/skel
+# seeds the home directory.
+MOUNT_IMG="$NEW_MNT"
+
+# The release may have system accounts the installer wasn't built with.
+cut -d: -f1 "$MOUNT_IMG/etc/passwd" "$MOUNT_IMG/etc/group" | grep -vx larch | sort -u \
+    > "$RUN/reserved-names"
+RESERVED_NAMES="$RUN/reserved-names"
+derive_username
+derive_hostname
+
+# ── Machine config ───────────────────────────────────────────────────────────
+
+CONFIG_TMP="$RUN/config"
 rm -rf "$CONFIG_TMP"
 mkdir -p "$CONFIG_TMP"
 
-INSTALL_STEPS=""
 show_step "Generating config files"
-
 printf '%s\n' "$LARCH_HOSTNAME" > "$CONFIG_TMP/hostname"
-
 printf '127.0.0.1\tlocalhost\n127.0.1.1\t%s\n::1\tlocalhost ip6-localhost ip6-loopback\n' \
     "$LARCH_HOSTNAME" > "$CONFIG_TMP/hosts"
 
@@ -131,112 +203,33 @@ printf '%s:%s:%d:0:99999:7:::\n' "$LARCH_USERNAME" "$pw_hash" "$today_days" \
 chmod 600 "$CONFIG_TMP/shadow"
 
 # machine-id — generated once at install so the machine keeps a stable identity
-# (DHCP lease/IP, DHCPv6 DUID, systemd journal). Written to /etc's upper layer,
-# and passed as systemd.machine_id= in the loader entries, since PID 1 reads it
-# before the /etc overlay mounts (the image's /etc/machine-id is empty).
+# (DHCP lease/IP, DHCPv6 DUID, systemd journal). sys.initramfs mounts the /etc
+# overlay before systemd starts, so PID 1 reads it from the upper layer.
 # Format: 32 lowercase hex digits (sourced from the kernel UUID pool).
-MACHINE_ID=$(tr -d '-' < /proc/sys/kernel/random/uuid)
-printf '%s\n' "$MACHINE_ID" > "$CONFIG_TMP/machine-id"
+tr -d '-' < /proc/sys/kernel/random/uuid > "$CONFIG_TMP/machine-id"
 
-# ── Partition ─────────────────────────────────────────────────────────────────
-
-show_step "Unmounting any existing partitions on $TARGET_DISK"
-for _p in "${TARGET_DISK}"[0-9]* "${TARGET_DISK}"p[0-9]*; do
-    [ -b "$_p" ] && umount "$_p" 2>/dev/null || true
-done
-unset _p
-
-show_step "Creating GPT partition table on $TARGET_DISK"
-wipefs -a "$TARGET_DISK" >/dev/null 2>&1
-# GPT partition names double as the kernel's root=PARTLABEL=LARCHSYS.
-printf 'label: gpt\nsize=%s, type=uefi, name=LARCHEFI\nsize=%s, type=linux, name=LARCHSYS\nsize=%s, type=linux, name=LARCHCONF\ntype=linux, name=LARCHHOME\n' \
-    "$EFI_PART_SIZE" "$SYS_PART_SIZE" "$CONF_PART_SIZE" | sfdisk -q "$TARGET_DISK" >/dev/null 2>&1
-blockdev --rereadpt "$TARGET_DISK" 2>/dev/null || true
-
-i=0
-while [ $i -lt 15 ]; do
-    [ -b "$PART1" ] && [ -b "$PART2" ] && [ -b "$PART3" ] && [ -b "$PART4" ] && break
-    sleep 1; i=$((i+1))
-done
-for _p in "$PART1" "$PART2" "$PART3" "$PART4"; do
-    [ -b "$_p" ] || die "Partition $_p not found after partitioning"
-done
-unset _p
-
-# ── LARCHSYS: write the OS image ─────────────────────────────────────────────
-
-_img="$ISO_MOUNT/larch-os/rootfs.squashfs"
-[ "$(stat -c %s "$_img")" -le "$(blockdev --getsize64 "$PART2")" ] \
-    || die "rootfs.squashfs is larger than the system partition ($SYS_PART_SIZE)"
-
-show_step "Writing the OS image to the system partition ($PART2)"
-dd if="$_img" of="$PART2" bs=4M conv=fsync 2>/dev/null \
-    || die "Failed to write rootfs.squashfs to $PART2"
-unset _img
-
-# Mounted only to read the image's /etc (the identity files start from it).
-mkdir -p "$MOUNT_SYS"
-mount_or_die squashfs "$PART2" "$MOUNT_SYS"
-
-# ── LARCHCONF: /etc's upper layer and /var ───────────────────────────────────
-
-mkdir -p "$MOUNT_CONF"
-
-show_step "Formatting config partition as ext4 ($PART3)"
-mkfs.ext4 -F -L LARCHCONF -m 0 "$PART3" >/dev/null 2>&1
+# ── LARCHCONF: /etc's and /var's upper layers ────────────────────────────────
 
 mount_or_die ext4 "$PART3" "$MOUNT_CONF"
 
-show_step "Seeding config partition"
-# /var's overlay upper layer starts empty: everything comes from the image
-# until a service writes it. Its root's mode/owner become /var's.
-mkdir -m 0755 "$MOUNT_CONF/var"
 show_step "Writing machine config into the config partition"
-apply_machine_config "$MOUNT_SYS" "$CONFIG_TMP" "$LARCH_USERNAME" "$MOUNT_CONF/etc"
+# The upper layers of /etc (this machine's identity) and /var (empty).
+seed_layers "$MOUNT_IMG" "$CONFIG_TMP" "$LARCH_USERNAME" "$MOUNT_CONF/etc" "$MOUNT_CONF/var"
 # overlayfs's workdirs: empty, on the same filesystem as the upper layers.
 mkdir -m 0700 "$MOUNT_CONF/etc-work" "$MOUNT_CONF/var-work"
+rm -rf "$CONFIG_TMP"
 
 sync
 umount "$MOUNT_CONF"
-umount "$MOUNT_SYS"
-
-# ── LARCHEFI: bootloader + kernel ────────────────────────────────────────────
-
-show_step "Formatting EFI partition as FAT32 ($PART1)"
-mkfs.fat -F 32 -n LARCHEFI "$PART1" >/dev/null 2>&1
-
-mkdir -p "$MOUNT_EFI"
-mount_or_die vfat "$PART1" "$MOUNT_EFI"
-
-show_step "Installing bootloader and kernel"
-mkdir -p "$MOUNT_EFI/EFI/BOOT" "$MOUNT_EFI/larch-os"
-cp "$ISO_MOUNT/EFI/BOOT/BOOTX64.EFI" "$MOUNT_EFI/EFI/BOOT/BOOTX64.EFI"
-cp -r "$ISO_MOUNT/loader" "$MOUNT_EFI/"
-# This machine's id and hostname, which systemd needs before /etc/fstab mounts
-# LARCHCONF (see the machine-id comment above).
-sed -i "s/^options .*/& systemd.machine_id=$MACHINE_ID systemd.hostname=$LARCH_HOSTNAME/" \
-    "$MOUNT_EFI"/loader/entries/*.conf
-cp "$ISO_MOUNT/larch-os/vmlinuz" "$MOUNT_EFI/larch-os/vmlinuz"
-cp "$ISO_MOUNT/larch-os/update-initramfs.img" "$MOUNT_EFI/larch-os/update-initramfs.img"
-
-sync
-umount "$MOUNT_EFI"
 
 # ── LARCHHOME: the user's home ───────────────────────────────────────────────
-
-mkdir -p "$MOUNT_HOME"
-
-show_step "Formatting home partition as ext4 ($PART4)"
-mkfs.ext4 -F -L LARCHHOME -m 0 "$PART4" >/dev/null 2>&1
 
 mount_or_die ext4 "$PART4" "$MOUNT_HOME"
 
 show_step "Seeding home partition for $LARCH_USERNAME"
 # The partition is mounted at /home; seed the user's home into /home/<username>.
 mkdir -p "$MOUNT_HOME/$LARCH_USERNAME"
-cp -a /mnt/iso/skel/. "$MOUNT_HOME/$LARCH_USERNAME/" 2>/dev/null || true
-# ISO9660 files are read-only (0444); cp -a carries that over, so restore
-# owner-write on the seeded dotfiles.
+cp -a "$MOUNT_IMG/etc/skel/." "$MOUNT_HOME/$LARCH_USERNAME/" 2>/dev/null || true
 chmod -R u+w "$MOUNT_HOME/$LARCH_USERNAME"
 chown -R 1000:1000 "$MOUNT_HOME/$LARCH_USERNAME"
 chmod 0750 "$MOUNT_HOME/$LARCH_USERNAME"
@@ -246,14 +239,17 @@ chown 0:0 "$MOUNT_HOME/lost+found" 2>/dev/null || true
 
 sync
 umount "$MOUNT_HOME"
+umount "$MOUNT_IMG"
+umount "$MOUNT_SYS"
 
 trap - EXIT
+cleanup
 
 # ── Done ─────────────────────────────────────────────────────────────────────
 
 dialog --backtitle "$DIALOG_BT" --title " Installation Complete " \
     --msgbox "\
-  larch-os has been installed successfully.
+  $REL_NAME has been installed.
 
   Name     : $LARCH_FULLNAME
   User     : $LARCH_USERNAME
@@ -264,7 +260,6 @@ dialog --backtitle "$DIALOG_BT" --title " Installation Complete " \
   Home     : $PART4  (LARCHHOME)
 
   Remove the installation media, then choose OK to reboot." \
-    18 60
+    19 60
 clear_screen
-umount /mnt/iso 2>/dev/null || true
 do_reboot

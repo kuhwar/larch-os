@@ -1,0 +1,120 @@
+# Packages purged from the rootfs AFTER configuration, before squashfs (stage 5,
+# scripts/clean-rootfs.sh: one `dpkg --purge --force-depends` while dpkg is
+# still present; dpkg itself is wiped right after via remove-files.list).
+#
+# One package per line; # comments and blank lines are ignored.
+#   - Shell globs are allowed (dpkg-query patterns): names that carry versions
+#     (gcc-14, libperl5.42, linux-headers-6.12…) change with each release/kernel.
+#   - A line starting with ! keeps the packages it matches, even if another
+#     line matched them.
+#   - Names/globs that match nothing installed are ignored.
+# For files that belong to packages that must stay, see remove-files.list.
+
+apt
+apt-utils
+apt-transport-https
+aptitude
+debconf-utils
+python3-apt
+python3-debian
+dpkg-dev
+debianutils
+tasksel
+tasksel-data
+
+# No privilege escalation on the immutable OS — root is locked and there is no
+# admin path; updates happen from install/upgrade media, not in-session.
+sudo
+
+# DKMS build toolchain — needed only in stage 4 to compile broadcom-sta (wl.ko)
+# and nvidia-kernel-dkms. The built .ko files stay in /lib/modules/*/updates/dkms;
+# the compiler itself (~100 MB) has no use on an immutable OS.
+dkms
+make
+patch
+fakeroot
+libfakeroot
+libdpkg-perl
+gcc
+gcc-[0-9]*
+gcc-x86-64-linux-gnu
+cpp
+cpp-[0-9]*
+cpp-x86-64-linux-gnu
+libgcc-[0-9]*-dev
+libasan[0-9]*
+libtsan[0-9]*
+liblsan[0-9]*
+libubsan[0-9]*
+libhwasan[0-9]*
+libitm[0-9]*
+libcc1-[0-9]*
+libisl[0-9]*
+libmpc[0-9]*
+binutils
+binutils-common
+binutils-x86-64-linux-gnu
+libbinutils
+libctf0
+libctf-nobfd0
+libsframe[0-9]*
+libgprofng[0-9]*
+libc6-dev
+libc-dev-bin
+linux-libc-dev
+libcrypt-dev
+rpcsvc-proto
+# The kernel's headers (DKMS built against them) and Debian's kbuild, if any.
+linux-headers-*
+linux-kbuild-*
+# gcc-<N>-base is runtime: libgcc-s1 / libstdc++6 depend on it.
+!gcc-*-base
+
+# Full perl (~49 MB raw). Every perl script left in the image is a packaging/
+# admin tool (debconf, adduser, update-rc.d, ucf, linux-base); nothing at
+# runtime runs perl and nothing links libperl. perl-base (Essential,
+# /usr/bin/perl) stays.
+perl
+perl-modules-*
+libperl5*
+
+# onnxruntime (~70 MB raw; matches nothing on trixie). From forky on,
+# libspa-0.2-modules depends on it for
+# PipeWire's ONNX filter-graph plugin (ML audio filters; the plugin itself is in
+# remove-files.list), which nothing in larch-os loads. Also the libraries only
+# onnxruntime uses: oneDNN, onnx, XNNPACK, pthreadpool, cpuinfo.
+# protobuf/abseil/re2 stay: other packages may link them.
+libonnxruntime*
+libonnx[0-9]*
+libdnnl[0-9]*
+libxnnpack[0-9]*
+libpthreadpool[0-9]*
+libcpuinfo[0-9]*
+
+# SANE scanner stack (~25 MB raw). Only colord depends on libsane1, for its
+# optional scanner colour-profiling helper (colord-sane + sensor plugin, in
+# remove-files.list); net-snmp is only there for SANE's magicolor backend.
+# GNOME's Document Scanner is a Flatpak that brings its own SANE.
+libsane1
+libsane-common
+libsnmp[0-9]*
+libsnmp-base
+
+# initramfs-tools (pulled in by the kernel and plymouth). Every larch initramfs
+# is assembled by hand from busybox (shared/build-lib.sh); plymouth runs from
+# the real root.
+initramfs-tools
+initramfs-tools-core
+klibc-utils
+libklibc
+
+# Debian branding themes (~17 MB). Its gschema override points the wallpaper at
+# a Debian theme; clean-rootfs.sh recompiles schemas afterwards so larch-os's
+# own wallpaper (90_larch.gschema.override) applies.
+desktop-base
+
+# cron (Debian "important" priority, pulled in by debootstrap). systemd timers
+# already cover logrotate/e2scrub, and user crontabs would only live in the
+# tmpfs /var until reboot — the setuid crontab is just a needless write path.
+cron
+cron-daemon-common

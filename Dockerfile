@@ -53,15 +53,15 @@ WORKDIR /build
 # standalone / CI builds.
 COPY . .
 
-# Output directory — mount a host volume here to retrieve larch-os.iso
+# Output directory — mount a host volume here to retrieve the outputs
 # e.g.  -v "$(pwd)/output:/output"
 RUN mkdir -p /output
 
-# Override OUTPUT_ISO so the ISO lands in the mounted output volume
-ENV LARCH_OUTPUT_ISO=/output/larch-os.iso
+# Outputs (system release files, installer ISO) land in the mounted volume
+ENV LARCH_OUTPUT_DIR=/output
 
-# Entrypoint: the build pipeline itself (all 9 stages live in docker-entrypoint.sh).
+# Entrypoint: dispatches to system/build.sh and installer/build.sh.
 # With no arguments it runs a full build; forward stage flags as CMD args, e.g.
-#   docker run --privileged ... larch-os-builder --stage 6
+#   docker run --privileged ... larch-os-builder system --stage 6
 # (the ./docker-build.sh wrapper does this for you).
 ENTRYPOINT ["./docker-entrypoint.sh"]

@@ -2,6 +2,7 @@
 work/
 output/
 kernel-cache/
+
 *.iso
 *.squashfs
 *.img

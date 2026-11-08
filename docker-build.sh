@@ -1,13 +1,22 @@
 #!/bin/bash
 # docker-build.sh — convenience wrapper for building larch-os inside Docker
 #
+# Two builds (see docker-entrypoint.sh):
+#   ./docker-build.sh                      # both → output/system/ + output/larch-installer.iso
+#   ./docker-build.sh system               # the system release files → output/system/
+#   ./docker-build.sh installer            # the installer ISO (needs system stages 2-4)
+#   ./docker-build.sh system --stage 6     # resume a build from a stage
+#   ./docker-build.sh installer --only 2   # run exactly one stage
+#   ./docker-build.sh system --to 4        # stop after a stage (4 = the base, enough for the installer)
+#   ./docker-build.sh system --desktop gnome   # only some desktops (or LARCH_DESKTOPS="gnome kde")
+#
 # Modes:
-#   ./docker-build.sh              # full build, ISO goes to ./output/larch-os.iso
-#   ./docker-build.sh --dev        # bind-mount source (faster iteration, no rebuild image)
-#   ./docker-build.sh --stage 6    # resume from a specific stage
-#   ./docker-build.sh --only 7     # run exactly one stage
-#   ./docker-build.sh --shell      # drop into a shell inside the builder container
-#   ./docker-build.sh --clean      # delete the output directory
+#   --dev     bind-mount the source (faster iteration, no image rebuild)
+#   --shell   drop into a shell inside the builder container
+#   --clean   delete output/ and work/
+#
+# LARCH_VERSION (e.g. the release tag) is stamped into the image and shown by
+# the updater; local builds default to dev-<timestamp>.
 #
 # Requirements:
 #   - Docker with --privileged support (Linux host recommended)
@@ -18,12 +27,12 @@ set -euo pipefail
 IMAGE_NAME="larch-os-builder"
 OUTPUT_DIR="$(pwd)/output"
 WORK_DIR="$(pwd)/work"   # shared build cache in dev mode
-KERNEL_CACHE="$(pwd)/kernel-cache"   # downloaded kernel .debs — survives --clean
 
 DEV_MODE=0
 SHELL_MODE=0
 CLEAN_MODE=0
 BUILD_ARGS=()
+TARGET=all
 
 # ── Parse arguments ───────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -31,6 +40,7 @@ while [[ $# -gt 0 ]]; do
         --dev)    DEV_MODE=1;   shift ;;
         --shell)  SHELL_MODE=1; shift ;;
         --clean)  CLEAN_MODE=1; shift ;;
+        system|installer) TARGET="$1"; BUILD_ARGS+=("$1"); shift ;;
         *)        BUILD_ARGS+=("$1"); shift ;;
     esac
 done
@@ -64,23 +74,17 @@ mkdir -p "$OUTPUT_DIR"
 DOCKER_RUN_ARGS=(
     --rm
     --privileged                      # required: chroot + bind mounts + mknod
-    -v "$OUTPUT_DIR:/output"          # ISO output goes here
-    -e "LARCH_OUTPUT_ISO=/output/larch-os.iso"
+    -v "$OUTPUT_DIR:/output"          # release files + ISO go here
+    -e "LARCH_OUTPUT_DIR=/output"
 )
+for _var in LARCH_VERSION LARCH_DESKTOPS; do
+    if [ -n "${!_var:-}" ]; then DOCKER_RUN_ARGS+=(-e "$_var=${!_var}"); fi
+done
 
 # Always mount work/ from the host so the debootstrap rootfs cache
 # survives across container runs and --stage N actually resumes correctly.
 mkdir -p "$WORK_DIR"
 DOCKER_RUN_ARGS+=(-v "$WORK_DIR:/build/work")
-
-# The kernel .debs (scripts/fetch-kernel.sh, from the larch-kernel releases)
-# live outside work/ and are kept across --clean. LARCH_KERNEL_REPO /
-# LARCH_KERNEL_TAG pick another repo or pin a release.
-mkdir -p "$KERNEL_CACHE"
-DOCKER_RUN_ARGS+=(-v "$KERNEL_CACHE:/build/kernel-cache")
-for _var in LARCH_KERNEL_REPO LARCH_KERNEL_TAG; do
-    [ -n "${!_var:-}" ] && DOCKER_RUN_ARGS+=(-e "$_var=${!_var}")
-done
 
 if [ "$DEV_MODE" -eq 1 ]; then
     # Also bind-mount the full source so edits are reflected without rebuilding the image.
@@ -99,7 +103,7 @@ fi
 # ── Run the build ─────────────────────────────────────────────────────────────
 echo ""
 echo "Starting larch-os build inside Docker (--privileged)"
-echo "Output will appear at: $OUTPUT_DIR/larch-os.iso"
+echo "Output will appear in: $OUTPUT_DIR"
 echo ""
 
 if [ "${#BUILD_ARGS[@]}" -gt 0 ]; then
@@ -110,15 +114,17 @@ else
 fi
 
 # ── Show result ───────────────────────────────────────────────────────────────
-ISO="$OUTPUT_DIR/larch-os.iso"
-if [ -f "$ISO" ]; then
-    SIZE=$(du -sh "$ISO" | cut -f1)
-    echo ""
-    echo "╔══════════════════════════════════════════════╗"
-    echo "  Build successful!"
-    echo "  $ISO  ($SIZE)"
-    echo "╚══════════════════════════════════════════════╝"
-else
-    echo "WARNING: ISO not found at $ISO — check build output above." >&2
-    exit 1
-fi
+echo ""
+case "$TARGET" in
+    system)    WANT=("$OUTPUT_DIR/system/SHA256SUMS") ;;
+    installer) WANT=("$OUTPUT_DIR/larch-installer.iso") ;;
+    *)         WANT=("$OUTPUT_DIR/system/SHA256SUMS" "$OUTPUT_DIR/larch-installer.iso") ;;
+esac
+# A partial run (--to/--only/--stage) needn't produce the final files.
+for f in "${WANT[@]}"; do
+    if [ -f "$f" ]; then
+        echo "  $f  ($(du -sh "$f" | cut -f1))"
+    else
+        echo "  (not produced by this run: $f)"
+    fi
+done

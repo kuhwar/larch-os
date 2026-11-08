@@ -1,10 +1,11 @@
 # Build artifacts
 work/
 output/
+# old larch-kernel .debs (no longer used)
 kernel-cache/
 
 # ISO and intermediate images that may be written to the project root
-larch-os.iso
+*.iso
 *.squashfs
 *.img
 

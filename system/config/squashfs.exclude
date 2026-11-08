@@ -1,0 +1,27 @@
+# Paths left out of sys.squashfs (stage 6: mksquashfs -wildcards -ef).
+# Patterns are relative to the rootfs root; * doesn't match a leading dot,
+# so dotfiles need their own .* line; "... <pattern>" matches at any depth.
+#
+# The mount points themselves stay in the image (nothing can be created on the
+# read-only root at boot); only their contents go.
+
+# Build-chroot leftovers, covered at boot by devtmpfs, tmpfs and proc/sysfs.
+dev/*
+dev/.*
+run/*
+run/.*
+tmp/*
+tmp/.*
+proc/*
+sys/*
+
+# The default user's /home/larch; LARCHHOME is mounted over /home.
+home/*
+home/.*
+
+# vmlinuz, System.map, config, Debian's initrd: the kernel ships as the
+# release's vmlinuz (stage 9) and boots from LARCHEFI, so a copy here is never used.
+boot/*
+boot/.*
+
+root/.cache

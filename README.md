@@ -18,12 +18,14 @@ networking, no package manager to fiddle with, no options to get lost in.
 >   alongside." Back up anything you care about first, and double-check which disk you
 >   select.
 >
-> - **For now, every new release requires a full install.** The installer offers an
->   **Update** option for disks that already have larch-os, but it is not maintained
->   yet: the disk layout and config format still change between releases, and an
->   update may leave the system broken. A full install **wipes the disk again —
->   including your `/home`.** Back up your data before reinstalling. Reliable atomic
->   upgrades (that keep `/home`) are planned — see the [Roadmap](#roadmap).
+> - **The installer needs an internet connection.** The installer ISO carries no copy of
+>   the system: it downloads the latest Larch OS release during installation (about
+>   1–2 GB), over a network cable or Wi-Fi.
+>
+> - **Updates are still young.** The **Update LARCH** boot-menu entry replaces the
+>   system and keeps your settings and `/home`, but the format still changes between
+>   releases. Keep backups. Systems installed before the current disk layout need one
+>   full reinstall, which **wipes the disk — including your `/home`.**
 >
 > - **UEFI only.** The machine must boot in UEFI mode. Legacy BIOS is not supported.
 
@@ -32,7 +34,8 @@ networking, no package manager to fiddle with, no options to get lost in.
 ## What you get
 
 - A read-only OS image (SquashFS) — system files can't be modified and reset on reboot.
-- GNOME Shell on Wayland, with Files (Nautilus) and Terminal.
+- Your choice of desktop — GNOME Shell on Wayland (with Files and Terminal) today, more to
+  come — switchable later from the updater.
 - Flathub preconfigured; install any app with the `flatpak` command.
 - A persistent home directory on its own partition.
 - A locked-down, zero-decision setup: one user account, DHCP networking, no root login,
@@ -45,7 +48,8 @@ networking, no package manager to fiddle with, no options to get lost in.
 | Firmware | **UEFI** (Secure Boot off — see below) | UEFI |
 | CPU | 64-bit x86 (x86-64) | x86-64 with KVM |
 | RAM | 2 GB | 4 GB+ |
-| Disk | 8 GB | 20 GB+ |
+| Disk | 12 GB | 30 GB+ |
+| Network | Cable or Wi-Fi (WPA2/WPA3 or open) for installing and updating | |
 | GPU | Anything with a basic framebuffer | Intel / AMD / virtio (Mesa) |
 
 **Secure Boot:** the boot images are not signed, so if your machine has Secure Boot
@@ -53,16 +57,17 @@ enabled you'll need to **disable it in firmware settings** before installing and
 
 ## 1. Download
 
-Grab the latest ISO from the [**Releases**](https://github.com/kuhwar/larch-os/releases) page:
+Grab the installer ISO from the newest `installer-v*` release on the
+[**Releases**](https://github.com/kuhwar/larch-os/releases) page:
 
-- Always-latest ISO: <https://github.com/kuhwar/larch-os/releases/latest/download/larch-os.iso>
-- Checksum: `larch-os.iso.sha256` (attached to each release)
+- `larch-installer.iso` and its checksum `larch-installer.iso.sha256`
 
-Verify the download before writing it:
+(The `v*` releases are the system itself — the installer and the updater download
+those for you.) Verify the download before writing it:
 
 ```bash
-sha256sum -c larch-os.iso.sha256
-# larch-os.iso: OK
+sha256sum -c larch-installer.iso.sha256
+# larch-installer.iso: OK
 ```
 
 ## 2. Write it to a USB stick
@@ -71,7 +76,7 @@ This **erases the USB stick.** Replace `/dev/sdX` with your stick's device
 (check carefully with `lsblk` — picking the wrong device destroys data):
 
 ```bash
-sudo dd if=larch-os.iso of=/dev/sdX bs=4M status=progress oflag=sync
+sudo dd if=larch-installer.iso of=/dev/sdX bs=4M status=progress oflag=sync
 ```
 
 Prefer a graphical tool? **GNOME Disks** ("Restore Disk Image…") or
@@ -85,27 +90,30 @@ larger is plenty.
    the USB entry, in **UEFI** mode).
 2. A short boot menu appears for 3 seconds, then larch-os boots **straight into the
    installer** — there is no live desktop to explore.
-3. The installer asks for exactly three things:
+3. The installer asks for:
 
    | Prompt | What it's for |
    |---|---|
    | **Full name** | Your display name; the username is derived from it (`Jane Doe` → `janedoe`) |
    | **Password** | Password for your single user account |
+   | **Wi-Fi network** | Only if no network cable is plugged in; the Wi-Fi password is not stored |
+   | **Desktop & version** | e.g. `larch-gnome-v0.1.5`, `larch-cosmic-v0.1.5`, `larch-gnome-v0.1.4` — the newest GNOME release is preselected |
    | **Target disk** | The disk to install onto — **this disk is wiped** |
 
    The computer's name is derived too: `<username>-<brand>-<device type>`, e.g.
-   `janedoe-lenovo-laptop`. If the disk already has larch-os, choose **Clean install**,
-   not Update (see [Updating](#updating)).
+   `janedoe-lenovo-laptop`. The installer goes online and lists the Larch OS releases
+   *before* asking for the disk, so without a network nothing is erased.
 
 4. Review the summary and confirm. The installer then **erases the target disk**,
-   creates its layout, and copies the system over.
+   creates its layout, downloads the system, and verifies it.
 5. When it finishes, remove the USB stick and reboot. You'll land at the GNOME login
    screen.
 
-> The disk is split into three partitions: a boot/system partition that holds the OS
-> image, a small config partition for system settings (Wi-Fi, Bluetooth, printers,
-> your account, logs), and a large partition for your `/home`. Keeping them separate
-> is what will make future upgrades possible without touching your files.
+> The disk is split into four partitions: a boot partition (bootloader and kernel), a
+> system partition holding the OS image, a small config partition for system settings
+> (Wi-Fi, Bluetooth, printers, your account, logs), and a large partition for your
+> `/home`. Keeping them separate is what lets updates replace the system without
+> touching your files.
 
 ## 4. First boot & installing apps
 
@@ -152,8 +160,8 @@ To get AppImages into the app grid with icons, install
 ## How it works (and what persists)
 
 - **The OS is read-only.** System files come from a compressed image and cannot be
-  changed. Anything written outside `/home` lives in memory and is **discarded on every
-  reboot** — so the base system always returns to a clean state.
+  changed. System settings (Wi-Fi, Bluetooth, printers, your password, logs) are kept
+  on a separate config partition, layered over the image's defaults.
 - **`/home` is persistent.** Your files, settings, and Flatpak apps live on a separate
   partition and survive reboots.
 - **There is no package manager** in the running system, and no root login. You shape
@@ -163,14 +171,20 @@ This is by design: it makes the system predictable and very hard to break.
 
 ## Updating
 
-**For now, use a full install for every new release.** The installer has an **Update**
-option that replaces the OS image in place and keeps your settings and `/home`, but it
-is not maintained across releases yet — the disk layout and config format are still
-changing, so an update may leave the system broken. A full install **erases the whole
-disk, including your `/home`** — so **back up your data first**.
+Pick **Update LARCH** in the boot menu (it shows for 3 seconds at startup). The
+updater gets online (cable, or it asks for a Wi-Fi network) and lists the last five Larch OS
+releases for every desktop — `larch-gnome-v0.1.5`, `larch-cosmic-v0.1.5`,
+`larch-gnome-v0.1.4`, … — and installs the one you choose: the new system is downloaded
+and verified first, then swapped in. Your settings, apps and `/home` are kept, and the disk
+is not repartitioned.
 
-Atomic, in-place upgrades that swap the OS image while preserving your `/home` are the
-top item on the [Roadmap](#roadmap).
+**Switching desktop** works the same way: pick an entry with another desktop. The system
+settings are reset for the new desktop, except your account and password, the computer's
+name, network connections, Bluetooth devices, printers, time zone, language, system
+Flatpak apps and logs. Your files in `/home` stay as they are.
+
+If an update is interrupted, the system may not start until you pick **Update LARCH**
+again and finish it. Keep backups anyway: the update format is still young.
 
 ## Limitations (by design)
 
@@ -178,23 +192,25 @@ top item on the [Roadmap](#roadmap).
   or remove users afterward.
 - **Networking is automatic (DHCP) only.** There's no network configuration UI.
 - **Apps via Flatpak (or AppImage) only.** No `apt`, no system package manager.
-- **No reliable in-place upgrades yet** — full install required (see above).
+- **Updates need a network** — there is no offline update.
 
 ## Roadmap
 
-- **Atomic, in-place upgrades** — replace the OS image and keep `/home`, with easy
-  rollback. *(Top priority.)*
+- **Rollback** — keep the previous system image and boot it if an update misbehaves.
 - Signed boot images for Secure Boot support.
 - A graphical app store experience on top of Flathub.
 
 ## Build it yourself
 
 larch-os is built reproducibly inside a privileged Docker container — no host build
-tools required beyond Docker:
+tools required beyond Docker. There are two builds, in their own directories:
 
 ```bash
-./docker-build.sh            # → output/larch-os.iso
+./docker-build.sh system      # system/    → output/system/ (sys-<desktop>.squashfs per desktop, vmlinuz, sys.initramfs, updater.initramfs, SHA256SUMS)
+./docker-build.sh installer   # installer/ → output/larch-installer.iso
+./test-qemu.sh --local        # try the installer in QEMU, installing the local system build
 ```
 
-Releases are produced automatically by GitHub Actions on each version tag. For the build
+Releases are produced by GitHub Actions: `v*` tags publish the system files,
+`installer-v*` tags publish the installer ISO. For the build
 internals and contributor notes, see [`CLAUDE.md`](CLAUDE.md).

@@ -26,6 +26,15 @@ part_is_larchefi() {
     [ "$_lbl" = "LARCHEFI" ]
 }
 
+# Disks (sysfs names) holding the installer medium (ISO9660 label LARCHISO, on
+# the whole disk or, as the kernel sees grub-mkrescue's hybrid layout, a
+# partition of it). They are left out of the target list.
+installer_disks() {
+    blkid 2>/dev/null | sed -n 's|^/dev/\([^:]*\):.*LABEL="LARCHISO".*|\1|p' | while read -r _n; do
+        if [ -f "/sys/class/block/$_n/partition" ]; then parent_disk "$_n"; else echo "$_n"; fi
+    done | sort -u
+}
+
 # Does a disk (by sysfs name, e.g. sda) hold a larch-os install? Partition sysfs
 # dirs are prefixed with the disk name (sda1, nvme0n1p1).
 disk_has_larch() {
@@ -40,9 +49,10 @@ disk_has_larch() {
 # dialog --menu of installable disks; selection (a /dev path) lands in TARGET_DISK.
 # Disks that already carry a larch-os install are marked and listed first, with the
 # first such disk pre-selected. Installing always erases the chosen disk;
-# in-place updates are the "Update LARCH" boot entry (updater/update.sh).
+# in-place updates are the "Update LARCH" boot entry (system/updater/update.sh).
 # ESC re-shows the dialog. Restart button calls do_reboot.
 pick_disk_dialog() {
+    _skip=" $(installer_disks | tr '\n' ' ') "
     while true; do
         _default=""
         set --
@@ -54,6 +64,7 @@ pick_disk_dialog() {
                     loop*|sr*|ram*|fd*|dm-*|md*) continue ;;
                 esac
                 [ -b "/dev/$_name" ] || continue
+                case "$_skip" in *" $_name "*) continue ;; esac
                 if disk_has_larch "$_name"; then _is_larch=1; else _is_larch=0; fi
                 [ "$_is_larch" -eq "$_want_larch" ] || continue
                 _sectors=$(cat "$_sys/size" 2>/dev/null || echo 0)

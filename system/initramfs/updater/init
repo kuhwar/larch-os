@@ -1,0 +1,34 @@
+#!/bin/sh
+# larch-os updater.initramfs init — PID 1
+#
+# Booted by the "Update LARCH" systemd-boot entry on an installed disk
+# (system/bootloader/entries/larch-update.conf): LARCHEFI's kernel plus this
+# initramfs. It sets up the pseudo filesystems and hands the console to
+# /usr/sbin/larch-update (system/updater/update.sh), which does everything
+# else (drivers, network, download, install) and reboots.
+#
+# Carries its own storage, network and input drivers and firmware
+# (system/build.sh stage 8) and never reads LARCHSYS for them, so it still
+# works when the system files are broken.
+set -e
+
+log() { echo "[larch-update-init] $*" > /dev/console; }
+
+mount -t proc     proc     /proc
+mount -t sysfs    sysfs    /sys
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts 2>/dev/null || true
+mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run
+
+log "larch-os updater starting"
+
+# setsid gives the updater its own session so it gets a controlling terminal
+# (without one, reads get no keyboard input on real hardware). If it ever
+# returns, reboot rather than let PID 1 exit (kernel panic).
+setsid cttyhack sh /usr/sbin/larch-update || true
+log "updater exited — rebooting"
+sync
+echo b > /proc/sysrq-trigger 2>/dev/null || true
+reboot -f
+while true; do sleep 60; done
