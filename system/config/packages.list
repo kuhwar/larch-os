@@ -1,25 +1,35 @@
 # larch-os BASE package list — what every desktop image has
 # Lines starting with # are comments; blank lines are ignored.
-# Processed by scripts/setup-chroot.sh (system stage 4). Desktop environments
+# Installed by system/build.sh (stage 4) with the builder's dnf into the base
+# rootfs: weak dependencies (Recommends) are never installed and docs never
+# extracted, so everything the image needs is listed here. The out-of-tree
+# kernel modules and their userspace are in akmods.list; desktop environments
 # add their own packages in system/desktops/<desktop>/packages.list.
 
-# ── Base / boot ──────────────────────────────────────────────────────────────
-# Debian's kernel. Its headers must be installed for DKMS (broadcom-sta, and the
-# NVIDIA driver setup-chroot.sh installs from backports) to build modules; they
-# and the compiler are purged again at stage 5 (remove.list).
-linux-image-amd64
-linux-headers-amd64
+# ── Release identity & kernel ────────────────────────────────────────────────
+# generic-release/-logos: Fedora's trademark guidelines want derivatives
+# unbranded. kernel-modules-extra: the less common drivers (the installer and
+# updater carry every disk and network driver the kernel has).
+generic-release
+generic-logos
+kernel-core
+kernel-modules
+kernel-modules-core
+kernel-modules-extra
+
+# ── Base system ──────────────────────────────────────────────────────────────
 systemd
-systemd-sysv
-udev
-dbus
-dbus-user-session
-libpam-systemd
-busybox-static
+systemd-udev
+# pam_systemd: registers logins with logind, which starts the user's systemd
+# and session bus. Without it GDM's greeter has no bus ("Unable to run session
+# message bus") and the screen stays black. Fedora's PAM stack loads it with
+# "-session", so its absence is otherwise silent.
+systemd-pam
+dbus-broker
 bash
 coreutils
 util-linux
-procps
+procps-ng
 findutils
 grep
 sed
@@ -27,177 +37,132 @@ gawk
 tar
 gzip
 bzip2
-xz-utils
+xz
 zstd
-iproute2
-iputils-ping
+iproute
+iputils
 less
 file
 which
-mount
 kmod
 pciutils
 usbutils
 dmidecode
-lsof
-strace
-vim-tiny
 nano
 curl
-wget
 ca-certificates
 openssl
-login
-passwd
+# passwd, useradd, newuidmap/newgidmap (rootless containers)
+shadow-utils
+authselect
 # Dictionary for libpwquality — without it GNOME Settings rejects every password
-cracklib-runtime
-adduser
-locales
+cracklib-dicts
+libpwquality
+# Every locale, precompiled (selectable in GNOME Settings)
+glibc-all-langpacks
+tzdata
 
 # ── Graphics / Wayland ───────────────────────────────────────────────────────
-xwayland
+mesa-dri-drivers
 mesa-vulkan-drivers
-libgl1-mesa-dri
-libgles2
-libdrm2
-libgbm1
-libegl1
-libwayland-client0
-libwayland-server0
+mesa-libEGL
+mesa-libgbm
+libglvnd-egl
+xorg-x11-server-Xwayland
 
 # ── Boot splash (OEM/firmware logo via BGRT) ─────────────────────────────────
-# plymouth shows a graphical splash; the bgrt theme reuses the firmware's
-# ACPI BGRT logo (the manufacturer logo) so boot continues that image instead
-# of scrolling logs. Started from systemd post-switch_root (sysinit.target).
 plymouth
-plymouth-themes
+plymouth-scripts
+plymouth-theme-spinner
 
 # ── Flatpak / portals ────────────────────────────────────────────────────────
 flatpak
+# flatpak verifies remotes' GPG signatures with gpg (only a weak dependency):
+# without it Flathub can't be added and nothing installs from it.
+gnupg2
 xdg-desktop-portal
 xdg-utils
 xdg-user-dirs
 
-# ── AppImage ─────────────────────────────────────────────────────────────────
-# AppImages are self-mounting executables the user keeps in /home, so they fit
-# the immutable model without touching the base OS. Most still embed the classic
-# type-2 runtime, which dlopen()s libfuse.so.2; the setuid fusermount it calls
-# already comes from fuse3 (via gvfs-fuse), symlinked as /usr/bin/fusermount.
-libfuse2t64
-
-# ── Rootless containers ──────────────────────────────────────────────────────
-# Podman itself is not in the image — the user installs a static build into
-# ~/.local when needed. What can't live in /home are the setuid newuidmap/
-# newgidmap helpers, which map the user's /etc/subuid + /etc/subgid range into
-# a user namespace so multi-user images (postgres, nginx, …) can switch users.
-# Container root is still the user's own UID; nothing maps to host root.
-uidmap
+# ── AppImage (libfuse.so.2 + setuid fusermount3) ─────────────────────────────
+# libfuse.so.2 mounts by exec'ing `fusermount`; rootfs-overlay/usr/bin/fusermount
+# links it to fuse3's setuid fusermount3 (same protocol), as Debian's fuse3 does,
+# instead of a second setuid helper from Fedora's fuse package.
+fuse-libs
+fuse3
 
 # ── Audio ────────────────────────────────────────────────────────────────────
 pipewire
-pipewire-pulse
+pipewire-pulseaudio
 pipewire-alsa
 wireplumber
-libspa-0.2-bluetooth
-libspa-0.2-jack
 
 # ── Networking ───────────────────────────────────────────────────────────────
-network-manager
-libnm0
-wpasupplicant
-wireless-tools
+NetworkManager
+NetworkManager-wifi
+wpa_supplicant
 iw
 
-# ── Time ─────────────────────────────────────────────────────────────────────
-# systemd-timesyncd: SNTP client (Debian's NTP pool via FallbackNTP=), enabled by
-# default. It also makes timedated report CanNTP, which GNOME Settings' "Automatic
-# Date & Time" switch needs. geoclue-2.0: the location service gsd-datetime uses
-# for "Automatic Time Zone" (GNOME Shell is its agent); on by default via
-# rootfs-overlay/usr/share/glib-2.0/schemas/90_larch.gschema.override.
-systemd-timesyncd
-geoclue-2.0
+# ── Time (chrony: Fedora's NTP client; timedated finds it for GNOME's
+#    "Automatic Date & Time") and location (GNOME's automatic time zone) ──────
+chrony
+geoclue2
 
 # ── Bluetooth ────────────────────────────────────────────────────────────────
 bluez
 
 # ── Printing ─────────────────────────────────────────────────────────────────
-# cups: full CUPS metapackage (daemon + client + common). printer-driver-all:
-# broad driver coverage (gutenprint, foomatic, hpijs, splix, ...) matching the
-# "broad hardware coverage" approach already used for WiFi firmware below.
-# cups-pk-helper: polkit-mediated admin actions — what GNOME Settings' Printers
-# panel uses to add/remove/configure queues without a root password (see the
-# polkit rule in rootfs-overlay/etc/polkit-1/rules.d/99-larch-cups.rules).
-# avahi-daemon: DNS-SD discovery so network/AirPrint printers show up in the
-# "Add Printer" dialog. ipp-usb: driverless IPP-over-USB support for modern
-# (2015+) USB printers. system-config-printer: gnome-control-center's printer
-# panel talks to its D-Bus service (org.fedoraproject.Config.Printing) during
-# add-printer to group duplicate discovered devices — without it, adding any
-# printer fails outright (GDBus ServiceUnknown), even though the GUI itself is
-# unused; only the daemon side of this package is needed.
+# Driverless (IPP Everywhere/AirPrint) via cups-filters, Gutenprint for older
+# printers; cups-pk-helper for GNOME Settings' Printers panel, avahi/nss-mdns
+# for discovery, ipp-usb for IPP-over-USB, system-config-printer-libs for the
+# D-Bus service GNOME Settings uses when adding a printer.
 cups
+cups-filters
+gutenprint-cups
 cups-pk-helper
-printer-driver-all
-avahi-daemon
+avahi
+nss-mdns
 ipp-usb
-system-config-printer
+system-config-printer-libs
 
 # ── Fonts ────────────────────────────────────────────────────────────────────
-fonts-noto
-fonts-noto-color-emoji
-fonts-dejavu
-fonts-liberation
+google-noto-sans-vf-fonts
+google-noto-serif-vf-fonts
+google-noto-sans-mono-vf-fonts
+google-noto-color-emoji-fonts
+dejavu-sans-fonts
+dejavu-sans-mono-fonts
+liberation-sans-fonts
+liberation-serif-fonts
+liberation-mono-fonts
 
 # ── Initramfs build dependencies ─────────────────────────────────────────────
 # The installer, updater and sys initramfs are assembled from this rootfs
-# (shared/build-lib.sh): mkfs.fat (dosfstools), mkfs.ext4 and e2fsck
-# (e2fsprogs), sfdisk/wipefs (util-linux — in base above), kmod, curl and
-# wpasupplicant (listed elsewhere).
-# systemd-boot: stage 9 publishes its systemd-bootx64.efi as the release file
-# BOOTX64.EFI (the images don't carry it: remove.list). systemd-boot depends on
-# "systemd-boot-efi-signed | systemd-boot-efi" and apt takes the first, the
-# Debian-signed build, which only ships systemd-bootx64.efi.signed (meant to be
-# chained from shim) — so the plain systemd-boot-efi is listed too.
+# (shared/build-lib.sh): busybox (static), dialog, mkfs.fat (dosfstools),
+# mkfs.ext4 and e2fsck (e2fsprogs), sfdisk/wipefs (util-linux), kmod, curl and
+# wpa_supplicant (above). systemd-boot-unsigned: stage 9 publishes its
+# systemd-bootx64.efi as the release file BOOTX64.EFI (remove.list drops it
+# from the images).
+busybox
+dialog
 dosfstools
 e2fsprogs
-systemd-boot
-systemd-boot-efi
-# dialog drives the installer's and the updater's full-screen UI (ncurses);
-# both builds fail without it.
-dialog
+systemd-boot-unsigned
 
-# ── Firmware (broad coverage for common hardware) ────────────────────────────
-firmware-linux-free
-firmware-linux-nonfree
-firmware-iwlwifi
-firmware-realtek
-firmware-atheros
-firmware-brcm80211
-firmware-mediatek
+# ── Firmware ─────────────────────────────────────────────────────────────────
+linux-firmware
+amd-gpu-firmware
+intel-gpu-firmware
+iwlwifi-mvm-firmware
+iwlwifi-dvm-firmware
+realtek-firmware
+atheros-firmware
+brcmfmac-firmware
+mt7xxx-firmware
+alsa-sof-firmware
+cirrus-audio-firmware
 
-# ── NVIDIA proprietary driver (Pascal and newer) ─────────────────────────────
-# Nouveau cannot do 3D acceleration on Pascal+ GPUs (signed-firmware reclocking
-# is unavailable), so e.g. a GTX 1070 Ti falls back to llvmpipe and GL apps fail
-# with `nvc0_screen_create ... -19`. The proprietary driver supports Maxwell→Ada
-# and runs fine on Wayland once nvidia-drm modeset is enabled — see the
-# `nvidia-drm.modeset=1` kernel arg in system/bootloader/entries/larch.conf, which is
-# also what makes GDM offer the Wayland session (61-gdm.rules disables Wayland
-# when the NVIDIA driver is loaded without modeset). It builds its kernel module
-# via nvidia-kernel-dkms at stage 4 (against linux-headers-amd64, at the top of
-# this list) and ships its own nouveau blacklist in /etc/modprobe.d. On machines
-# without an NVIDIA GPU the module simply never loads — harmless, same as
-# broadcom-sta below. Mesa stays installed for those machines; GLVND dispatches
-# to the right driver at runtime.
-#
-# NOT listed here: nvidia-driver is installed from trixie-backports by
-# setup-chroot.sh, which adds the backports source and pins with
-# `-t trixie-backports`. As of this writing backports carries 550.163.01 (same
-# upstream version as main, just rebuilt for bpo13), so the pin is currently a
-# no-op version-wise — it's kept forward-looking: when Debian backports a newer
-# branch (e.g. 580.x, the last to support Pascal) a rebuild picks it up
-# automatically. 550.x already supports Pascal (GTX 1070 Ti) fine.
-
-# ── Broadcom BCM4360 WiFi (2015 MacBook Air) ─────────────────────────────────
-# BCM4360 (14e4:43a0) has no open-source driver. broadcom-sta-dkms provides the
-# proprietary wl.ko, built by DKMS at stage 4 against linux-headers-amd64
-# (at the top of this list; clean-rootfs.sh removes them afterwards).
-broadcom-sta-dkms
+# ── GPU switching / NVIDIA suspend helpers ───────────────────────────────────
+# switcheroo-control: GNOME Settings' "Graphics" row; kbd: chvt for nvidia-sleep.sh
+switcheroo-control
+kbd

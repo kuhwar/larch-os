@@ -2,7 +2,7 @@ name: Build installer
 
 # Builds the Larch OS installer ISO inside the privileged Docker builder and
 # publishes it as a GitHub Release. The ISO carries no system files: it boots
-# Debian's kernel with installer.initramfs (drivers, firmware, tools), and the
+# the system's (Fedora) kernel with installer.initramfs (drivers, firmware, tools), and the
 # installer downloads the system release and desktop the user picks
 # (build-system.yml).
 #

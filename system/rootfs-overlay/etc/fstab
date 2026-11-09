@@ -27,8 +27,8 @@
 # the read-only root at boot.
 
 LABEL=LARCHCONF          /conf       ext4      defaults,relatime                              0  0
-overlay                  /etc        overlay   lowerdir=/etc,upperdir=/conf/etc,workdir=/conf/etc-work,x-systemd.requires-mounts-for=/conf  0  0
-overlay                  /var        overlay   lowerdir=/var,upperdir=/conf/var,workdir=/conf/var-work,x-systemd.requires-mounts-for=/conf  0  0
+overlay                  /etc        overlay   lowerdir=/etc,upperdir=/conf/etc,workdir=/conf/etc-work,index=off,metacopy=off,redirect_dir=off,x-systemd.requires-mounts-for=/conf  0  0
+overlay                  /var        overlay   lowerdir=/var,upperdir=/conf/var,workdir=/conf/var-work,index=off,metacopy=off,redirect_dir=off,x-systemd.requires-mounts-for=/conf  0  0
 tmpfs                    /var/tmp    tmpfs     mode=1777,nosuid,nodev,size=25%                0  0
 LABEL=LARCHHOME          /home       ext4      defaults,relatime,nofail                       0  2
 tmpfs                    /media      tmpfs     mode=0755,nosuid,nodev                         0  0

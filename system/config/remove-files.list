@@ -1,129 +1,140 @@
-# Files and directories deleted from the rootfs before squashfs (stage 5,
-# scripts/clean-rootfs.sh, after the remove.list purge). For things whose
-# package must stay (essential, or a dependency of something needed), and for
-# build leftovers no package owns.
+# Files and directories deleted from each desktop's rootfs before squashfs
+# (stage 5, scripts/clean-rootfs.sh, after remove.list and the orphans). For
+# things whose package must stay, and for leftovers no package owns.
 #
 # One absolute path per line, removed recursively (rm -rf); # comments and
 # blank lines are ignored. Shell globs are expanded inside the rootfs; a path
 # or glob that matches nothing is skipped. Don't list "/" or top-level dirs.
-# Logic that a plain list can't express (iwlwifi firmware selection, the
-# wallpaper allow-list, chmod) stays in clean-rootfs.sh.
 
-# ── Package manager ──────────────────────────────────────────────────────────
-/usr/bin/apt*
-/usr/bin/dpkg*
-/usr/lib/apt
-/usr/lib/dpkg
-/var/lib/apt
-/var/lib/dpkg
-/var/cache/apt
-/var/cache/debconf
-/etc/apt
-/etc/dpkg
-/usr/lib/python3/dist-packages/apt*
-/usr/lib/python3/dist-packages/debian*
-# dpkg's own daily backup job would fail every run once dpkg is gone.
-/usr/lib/systemd/system/dpkg-db-backup.service
-/usr/lib/systemd/system/dpkg-db-backup.timer
-/etc/systemd/system/timers.target.wants/dpkg-db-backup.timer
-/etc/cron.daily/dpkg
+# ── Package databases ────────────────────────────────────────────────────────
+/usr/lib/sysimage/rpm
+/usr/lib/sysimage/libdnf5
+/var/lib/rpm
+/var/lib/dnf
+/var/cache/dnf
+/var/cache/libdnf5
+/var/cache/akmods
+/etc/dnf
+/etc/yum.repos.d
+/etc/distro.repos.d
+/var/log/dnf*
 
-# ── Build leftovers ──────────────────────────────────────────────────────────
-# Whatever the toolchain purge left behind (cc1 alone is ~60 MB).
-/usr/libexec/gcc
-/usr/lib/gcc
-/usr/bin/gcc
-# Dev headers; static/libtool archives are found by name in clean-rootfs.sh.
+# ── Fedora's own Flatpak remote ──────────────────────────────────────────────
+# Fedora's flatpak package adds the Fedora (OCI) remote at boot; larch's only
+# remote is Flathub (rootfs-overlay/etc/flatpak/remotes.d).
+/usr/lib/systemd/system/flatpak-add-fedora-repos.service
+/etc/systemd/system/*.target.wants/flatpak-add-fedora-repos.service
+
+# ── systemd-boot (systemd-udev's part of it) ─────────────────────────────────
+/usr/bin/bootctl
+/usr/lib/systemd/system/systemd-boot-update.service
+/usr/lib/systemd/system/systemd-boot-random-seed.service
+/usr/lib/systemd/system/sysinit.target.wants/systemd-boot-random-seed.service
+
+# ── Development leftovers ────────────────────────────────────────────────────
 /usr/include/*
-# DKMS sources: broadcom-sta-dkms and nvidia-kernel-dkms built their .ko into
-# /lib/modules at stage 4.
-/usr/src/linux-headers-*
-/usr/src/broadcom-sta-*
-/usr/src/nvidia-*
-/var/lib/dkms
+/usr/share/gir-1.0
 /usr/lib/modules/*/build
 /usr/lib/modules/*/source
+/usr/src/*
 
-# ── Docs ─────────────────────────────────────────────────────────────────────
-# Translations (/usr/share/locale) and translated GNOME help are kept: every
-# language is selectable. /usr/share/i18n is only the source data locale-gen
-# compiles from (setup-chroot.sh already compiled every locale into
-# /usr/lib/locale/locale-archive).
-/usr/share/doc
-/usr/share/man
-/usr/share/info
-/usr/share/i18n
+# ── NVIDIA: compute, ray-tracing and video-codec userspace ───────────────────
+# The Debian image never had it (only the GL/EGL/Vulkan driver), and Flatpak
+# apps bring their own NVIDIA userspace (org.freedesktop.Platform.GL.nvidia):
+# on the host only gnome-shell/mutter use the driver, through GL/EGL/GBM/Vulkan.
+/usr/lib64/libcuda.so*
+# libnvidia-present links libcuda; nothing links it, and no GL/EGL/Vulkan
+# vendor file names it.
+/usr/lib64/libnvidia-present.so*
+/usr/lib64/libcudadebugger.so*
+/usr/lib64/libnvidia-nvvm.so*
+/usr/lib64/libnvidia-nvvm70.so*
+/usr/lib64/libnvidia-ptxjitcompiler.so*
+/usr/lib64/libnvidia-rtcore.so*
+/usr/lib64/libnvoptix.so*
+/usr/share/nvidia/nvoptix.bin
+/usr/lib64/libnvcuvid.so*
+/usr/lib64/libnvidia-encode.so*
+/usr/lib64/libnvidia-opticalflow.so*
+/usr/lib64/libnvidia-opencl.so*
+/etc/OpenCL/vendors/nvidia.icd
+/usr/lib64/libnvidia-ngx.so*
+/usr/bin/nvidia-ngx-updater
+/usr/lib64/nvidia/wine
+/usr/lib64/libnvidia-pkcs11*.so*
 
-# ── Setuid/setgid helpers with no job on this design ─────────────────────────
-# Their packages (util-linux, passwd, gstreamer) are essential or depended on.
-# Kept: passwd (GNOME Settings runs it as the user), unix_chkpwd (lock screen),
-# dbus-daemon-launch-helper, fusermount3 (AppImage, gvfs, document portal),
-# newuidmap/newgidmap (rootless Podman), nvidia-modprobe (CUDA loads
-# nvidia-uvm on demand). mount/umount lose setuid in clean-rootfs.sh.
-# su: root is locked; the only other account is the user's own.
-/usr/bin/su
-/etc/pam.d/su
-/etc/pam.d/su-l
-# chfn: GNOME renames via AccountsService (usermod, as root).
-/usr/bin/chfn
-/etc/pam.d/chfn
-# chsh: bash is the only shell, and none can be installed.
-/usr/bin/chsh
-/etc/pam.d/chsh
-# gpasswd: group administration; no group has administrators.
-/usr/bin/gpasswd
-# chage: password ageing (setgid shadow); nothing uses it.
-/usr/bin/chage
-# GStreamer's PTP clock helper (file capabilities, for AES67 network audio).
-/usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-ptp-helper
+# ── NVIDIA: X.Org driver bits (there is no X server) ─────────────────────────
+/usr/lib64/xorg/modules/drivers/nvidia_drv.so
+/usr/lib64/nvidia/xorg
+/usr/bin/nvidia-xconfig
 
-# ── PipeWire's ONNX plugin (onnxruntime itself is in remove.list) ────────────
-/usr/lib/x86_64-linux-gnu/spa-0.2/filter-graph/libspa-filter-graph-plugin-onnx.so
-
-# ── colord's SANE helper and sensor plugin (SANE itself is in remove.list) ──
-/usr/libexec/colord-sane
-/usr/lib/x86_64-linux-gnu/colord-plugins/libcolord_sensor_sane.so
-
-# ── GUI bits of system-config-printer ────────────────────────────────────────
-# Only its D-Bus service (org.fedoraproject.Config.Printing) is needed, by
-# GNOME Settings' Printers panel. The "Print Settings" launcher duplicates
-# Settings, and GNOME has no tray for the applet (gsd-print-notifications
-# covers printer notifications).
-/usr/share/applications/system-config-printer.desktop
-/etc/xdg/autostart/print-applet.desktop
-
-# ── Vulkan drivers that never apply ──────────────────────────────────────────
-# Debian's amd64 Mesa builds every driver. lvp = software (llvmpipe) Vulkan;
-# gfxstream/virtio = VM-guest-only; Asahi (Apple Silicon) and Freedreno
-# (Qualcomm Adreno) GPUs never appear on an x86 PC. GTK4 falls back to its GL
-# renderer without a hardware Vulkan ICD; Flatpak apps bring their own Mesa.
-/usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
-/usr/lib/x86_64-linux-gnu/libvulkan_gfxstream.so
-/usr/lib/x86_64-linux-gnu/libvulkan_virtio.so
-/usr/lib/x86_64-linux-gnu/libvulkan_asahi.so
-/usr/lib/x86_64-linux-gnu/libvulkan_freedreno.so
+# ── Vulkan drivers that never apply on a PC ──────────────────────────────────
+# lvp = software Vulkan; gfxstream/virtio = VM-guest-only; Asahi (Apple
+# Silicon), Freedreno (Qualcomm), PowerVR, Panfrost/Broadcom (ARM SoCs).
+/usr/lib64/libvulkan_lvp.so
+/usr/lib64/libvulkan_gfxstream.so
+/usr/lib64/libvulkan_virtio.so
+/usr/lib64/libvulkan_asahi.so
+/usr/lib64/libvulkan_freedreno.so
+/usr/lib64/libvulkan_powervr_mesa.so
+/usr/lib64/libvulkan_panfrost.so
+/usr/lib64/libvulkan_broadcom.so
+# NVK (nouveau's Vulkan): the NVIDIA packages blacklist nouveau, so it never loads.
+/usr/lib64/libvulkan_nouveau.so
+/usr/share/vulkan/icd.d/nouveau_icd*.json
 /usr/share/vulkan/icd.d/lvp_icd*.json
 /usr/share/vulkan/icd.d/gfxstream*_icd*.json
 /usr/share/vulkan/icd.d/virtio_icd*.json
 /usr/share/vulkan/icd.d/asahi_icd*.json
 /usr/share/vulkan/icd.d/freedreno_icd*.json
+/usr/share/vulkan/icd.d/powervr_mesa_icd*.json
+/usr/share/vulkan/icd.d/panfrost_icd*.json
+/usr/share/vulkan/icd.d/broadcom_icd*.json
 
-# ── Firmware for hardware that's never in a PC (~100 MB raw) ─────────────────
+# ── Docs (tsflags=nodocs skips most; these come from %license, scriptlets) ───
+# Translations (/usr/share/locale) and translated GNOME help are kept.
+/usr/share/doc
+/usr/share/man
+/usr/share/info
+/usr/share/gtk-doc
+/usr/share/licenses
+
+# ── Setuid/setgid helpers with no job on this design ─────────────────────────
+# Kept: passwd (GNOME Settings runs it as the user), unix_chkpwd (lock screen),
+# dbus-daemon-launch-helper, fusermount3 (AppImage, gvfs, document portal),
+# newuidmap/newgidmap (rootless Podman), nvidia-modprobe (CUDA loads
+# nvidia-uvm on demand). mount/umount lose setuid in clean-rootfs.sh.
+/usr/bin/su
+/etc/pam.d/su
+/etc/pam.d/su-l
+/usr/bin/pkexec
+/usr/bin/chfn
+/etc/pam.d/chfn
+/usr/bin/chsh
+/etc/pam.d/chsh
+/usr/bin/gpasswd
+/usr/bin/newgrp
+/usr/bin/sg
+/usr/bin/chage
+# pam_timestamp_check: sudo's timestamp helper; lockdev (setgid lock): serial
+# device locking nothing here does.
+/usr/bin/pam_timestamp_check
+/usr/bin/lockdev
+/usr/libexec/gstreamer-1.0/gst-ptp-helper
+/usr/lib64/gstreamer-1.0/gst-ptp-helper
+
+# ── Firmware for hardware that's never in a PC ───────────────────────────────
 # Kept on purpose: ti/ (TAS2781-family laptop amplifiers) and nxp/ (BT/Wi-Fi
-# modules). Dangling compatibility symlinks are cleaned up by clean-rootfs.sh.
-# MediaTek Filogic router/AP SoCs and cards.
+# modules). Dangling compatibility symlinks are cleaned up by setup-chroot.sh.
 /usr/lib/firmware/mediatek/mt7622*
 /usr/lib/firmware/mediatek/mt7981*
 /usr/lib/firmware/mediatek/mt7986*
 /usr/lib/firmware/mediatek/mt7987
 /usr/lib/firmware/mediatek/mt7988
 /usr/lib/firmware/mediatek/mt7996
-# MediaTek mt81xx ARM Chromebook SoCs, incl. their SOF audio DSP.
 /usr/lib/firmware/mediatek/mt81*
 /usr/lib/firmware/mediatek/sof
 /usr/lib/firmware/mediatek/sof-tplg
-# Qualcomm router/AP chips (IPQ/QCN, QCA4019/9888/9984/99X0) and Snapdragon
-# SoC Wi-Fi (WCN3990, WCN6750).
 /usr/lib/firmware/ath10k/QCA4019
 /usr/lib/firmware/ath10k/QCA9888
 /usr/lib/firmware/ath10k/QCA9984
@@ -134,7 +145,6 @@
 /usr/lib/firmware/ath11k/WCN6750
 /usr/lib/firmware/ath12k/IPQ*
 /usr/lib/firmware/ath12k/QCN*
-# Arm Mali GPUs, Chips&Media codecs (ARM SoCs), Chelsio server NICs, Tegra.
 /usr/lib/firmware/arm
 /usr/lib/firmware/cnm
 /usr/lib/firmware/cxgb4
@@ -144,6 +154,5 @@
 /tmp/*
 /var/tmp/*
 /var/log/*.log
-/var/log/*.gz
 /root/.bash_history
 /home/*/.bash_history

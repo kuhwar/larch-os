@@ -1,8 +1,7 @@
 # larch-os builder image
 # Provides all host-side build dependencies.
 # The container must be run with --privileged because the build uses:
-#   - debootstrap (needs mknod to create /dev nodes in the chroot)
-#   - mount --bind (proc/sys/dev into the chroot)
+#   - mount --bind (proc/sys/dev into the rootfs) while dnf installs into it
 #   - chroot itself
 #
 # Usage (see docker-build.sh for a one-liner wrapper):
@@ -11,39 +10,30 @@
 #       -v "$(pwd)/output:/output" \
 #       larch-os-builder
 
-FROM debian:trixie-slim
+# The same Fedora release as system/config/fedora-release: the builder's dnf
+# installs the rootfs with its own repo configuration (--use-host-config), and
+# akmods builds the out-of-tree kernel modules here, against the rootfs's
+# kernel, so no compiler ever enters the image.
+FROM docker.io/library/fedora:45
 
-# Install all build-time tools in one layer
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    # rootfs bootstrap
-    debootstrap \
+RUN dnf -y install \
+        https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-45.noarch.rpm \
+        https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-45.noarch.rpm \
+ && dnf -y install --setopt=install_weak_deps=False \
     # squashfs compression
     squashfs-tools \
-    # ISO creation
-    xorriso \
-    # FAT image manipulation (for EFI boot image)
-    mtools \
-    dosfstools \
-    # GPT partitioning (needed by installer, not build)
-    gdisk \
-    # systemd-boot EFI binary (for installed-to-disk systems)
-    systemd-boot \
-    # GRUB2 (UEFI only) — used for ISO/live boot (has ISO9660 driver; systemd-boot does not)
-    grub-common \
-    grub-efi-amd64-bin \
-    # initramfs packing
-    cpio \
-    gzip \
-    # misc utilities used by the build pipeline (docker-entrypoint.sh)
-    ca-certificates \
-    curl \
-    rsync \
-    # busybox-static for initramfs
-    busybox-static \
-    # xz-utils / zstd to decompress .ko.xz / .ko.zst modules for busybox modprobe
-    xz-utils \
-    zstd \
-  && rm -rf /var/lib/apt/lists/*
+    # ISO creation (xorriso) and the GRUB EFI image's FAT filesystem
+    xorriso mtools dosfstools \
+    # GRUB2 (UEFI only) for the installer ISO: grub2-mkrescue + x86_64-efi modules
+    grub2-tools-extra grub2-efi-x64-modules \
+    # initramfs packing, image work
+    cpio gzip xz zstd rsync findutils util-linux file \
+    # readelf for the shared-library guard (system stage 5)
+    binutils \
+    # akmods: builds kmod RPMs (NVIDIA, Broadcom wl) for the rootfs's kernel
+    akmods rpm-build gcc make \
+    ca-certificates curl \
+ && dnf clean all
 
 WORKDIR /build
 

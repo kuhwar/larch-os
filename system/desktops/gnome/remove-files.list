@@ -1,0 +1,8 @@
+# GNOME-specific file removals (appended to config/remove-files.list).
+# The two gnome-shell helpers whose libraries remove.list takes out, and their
+# D-Bus activation, so nothing tries to start them.
+/usr/libexec/gnome-shell-calendar-server
+/usr/share/dbus-1/services/org.gnome.Shell.CalendarServer.service
+/usr/libexec/gnome-shell-portal-helper
+/usr/share/dbus-1/services/org.gnome.Shell.PortalHelper.service
+/usr/share/applications/org.gnome.Shell.PortalHelper.desktop

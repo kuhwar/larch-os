@@ -6,7 +6,7 @@ known-good state. You get a clean GNOME (Wayland) desktop, and you install apps 
 [Flatpaks](https://flatpak.org/) from [Flathub](https://flathub.org/). Your files and
 settings live in `/home` and are kept separate from the OS.
 
-It is based on Debian Trixie and is intentionally simple: one user, automatic (DHCP)
+It is built from Fedora packages and is intentionally simple: one user, automatic (DHCP)
 networking, no package manager to fiddle with, no options to get lost in.
 
 ---

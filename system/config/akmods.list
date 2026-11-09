@@ -1,0 +1,11 @@
+# Out-of-tree kernel modules: one line per akmod, followed by the userspace
+# packages installed together with its kmod (they require it).
+# system/build.sh (stage 4) builds each akmod's kmod RPM with akmodsbuild IN
+# THE BUILDER, against the rootfs's kernel, and installs the RPMs into the
+# rootfs: no compiler or kernel headers ever enter the image.
+#
+# NVIDIA 580: the last branch that supports Pascal (GTX 10xx) through Ada;
+# RPM Fusion's current branch (590+) dropped Pascal.
+akmod-nvidia-580xx   xorg-x11-drv-nvidia-580xx xorg-x11-drv-nvidia-580xx-power
+# Broadcom BCM4360 Wi-Fi (2015 MacBook Air): no open-source driver.
+akmod-wl             broadcom-wl

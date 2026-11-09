@@ -13,9 +13,9 @@
 # not listed: they are rewritten on the new image (apply_machine_config).
 KEEP_ETC="NetworkManager/system-connections cups/printers.conf cups/classes.conf
 cups/subscriptions.conf cups/ppd localtime timezone adjtime locale.conf
-default/locale vconsole.conf default/keyboard X11/xorg.conf.d/00-keyboard.conf"
+vconsole.conf X11/xorg.conf.d/00-keyboard.conf"
 KEEP_VAR="lib/NetworkManager lib/bluetooth lib/AccountsService lib/cups lib/flatpak
-lib/systemd/backlight lib/systemd/rfkill lib/systemd/timers lib/systemd/timesync
+lib/systemd/backlight lib/systemd/rfkill lib/systemd/timers lib/chrony
 log/journal"
 
 # Write this machine's identity files into <out-dir> (an /etc upper layer):

@@ -1,0 +1,14 @@
+# GNOME-specific removals (appended to config/remove.list; same format).
+#
+# Fedora's gnome-shell hard-requires evolution-data-server (only its calendar
+# event server, gnome-shell-calendar-server, links it) and WebKitGTK 6 (only
+# the captive-portal login window, gnome-shell-portal-helper); e-d-s pulls in
+# a second WebKit (4.1) besides. ~250M uncompressed for two helpers: both go
+# (remove-files.list deletes the helpers and their D-Bus activation), the
+# shell's calendar shows dates without events, and a hotel/airport Wi-Fi login
+# opens in the user's browser instead of a shell window.
+evolution-data-server*
+webkit2gtk4.1*
+webkitgtk6.0*
+javascriptcoregtk4.1*
+javascriptcoregtk6.0*

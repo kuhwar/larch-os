@@ -56,7 +56,7 @@ if [ "$CLEAN_MODE" -eq 1 ]; then
         docker run --rm \
             -v "$OUTPUT_DIR:/output" \
             -v "$WORK_DIR:/work" \
-            debian:trixie-slim \
+            docker.io/library/fedora:45 \
             sh -c 'find /output /work -mindepth 1 -delete 2>/dev/null; true'
     fi
     rm -rf "$OUTPUT_DIR" "$WORK_DIR"
@@ -81,7 +81,7 @@ for _var in LARCH_VERSION LARCH_DESKTOPS; do
     if [ -n "${!_var:-}" ]; then DOCKER_RUN_ARGS+=(-e "$_var=${!_var}"); fi
 done
 
-# Always mount work/ from the host so the debootstrap rootfs cache
+# Always mount work/ from the host so the base rootfs (and the dnf and kmod caches)
 # survives across container runs and --stage N actually resumes correctly.
 mkdir -p "$WORK_DIR"
 DOCKER_RUN_ARGS+=(-v "$WORK_DIR:/build/work")

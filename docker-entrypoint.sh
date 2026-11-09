@@ -2,7 +2,7 @@
 # docker-entrypoint.sh — the builder container's ENTRYPOINT
 #
 # Larch OS is built ONLY inside the privileged builder container: the builds
-# need `mknod` (debootstrap), `mount --bind` of proc/sys/dev and `chroot`,
+# need `mount --bind` of proc/sys/dev and `chroot` (dnf installs into the rootfs),
 # none of which are available during an unprivileged `docker build`. Use
 # ./docker-build.sh to launch it; its arguments are forwarded here.
 #

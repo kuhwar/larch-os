@@ -6,7 +6,7 @@
 # release carrying these files, all built from the same base rootfs:
 #
 #   sys-<desktop>.squashfs  one OS root per desktop (gnome, kde, …) → LARCHSYS:/sys.squashfs
-#   vmlinuz                 Debian's kernel          → LARCHEFI:/larch-os/vmlinuz
+#   vmlinuz                 Fedora's kernel          → LARCHEFI:/larch-os/vmlinuz
 #   sys.initramfs           boots the system         → LARCHEFI:/larch-os/sys.initramfs
 #   updater.initramfs       the "Update LARCH" entry → LARCHEFI:/larch-os/updater.initramfs
 #   BOOTX64.EFI             systemd-boot             → LARCHEFI:/EFI/BOOT/BOOTX64.EFI

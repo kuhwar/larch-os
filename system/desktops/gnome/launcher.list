@@ -1,0 +1,6 @@
+# Launchers shown in the GNOME app grid; every other .desktop entry in the
+# image gets NoDisplay=true (scripts/clean-rootfs.sh). Software comes from
+# Flathub, so the core grid is just these.
+org.gnome.Nautilus.desktop
+org.gnome.Settings.desktop
+org.gnome.Terminal.desktop

@@ -1,21 +1,28 @@
 # GNOME desktop — installed on top of the base (system/config/packages.list)
-# by scripts/setup-desktop.sh (system stage 5). Comments and blank lines are
-# ignored.
+# by the builder's dnf (system stage 5), weak dependencies off. Comments and
+# blank lines are ignored.
 
 # ── GNOME (Wayland) ─────────────────────────────────────────────────────────
 gnome-shell
-gdm3
+gdm
 gnome-session
 gnome-settings-daemon
-gnome-keyring
 gnome-control-center
-gnome-themes-extra
+# No gnome-keyring: GNOME 51's secret service is oo7 (oo7-daemon, pulled in by
+# gnome-shell; pam_oo7 unlocks it at login). gnome-keyring's PAM module only
+# logged "gkr-pam: unable to locate daemon control file" at every login.
 adwaita-icon-theme
+adwaita-sans-fonts
+adwaita-mono-fonts
 nautilus
 gnome-terminal
 gvfs
-gvfs-backends
 gvfs-fuse
+gvfs-smb
+gvfs-mtp
+gvfs-gphoto2
+gvfs-afc
+gvfs-nfs
 # No image viewer / PDF viewer / text editor in the core image — the core
 # desktop is Nautilus + GNOME Terminal only. Users get Loupe, Papers, Text
 # Editor etc. from Flathub.

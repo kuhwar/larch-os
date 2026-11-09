@@ -15,8 +15,11 @@ log()  { echo; echo "═══════════════════�
 info() { echo "  ▸ $*"; }
 die()  { echo "ERROR: $*" >&2; exit 1; }
 
+# Non-comment, non-blank lines of a list file, whitespace-trimmed.
+list_entries() { sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$1" | grep -v '^$' || true; }
+
 # ── Module sets (extended regexes over modules.dep paths) ────────────────────
-# Matched against "kernel/drivers/…/x.ko.xz"; each module's dependencies come
+# Matched against "kernel/drivers/…/x.ko.xz" (and the kmods' "extra/…"); each module's dependencies come
 # along from modules.dep. Use [.] rather than \. (awk -v unescapes strings).
 #
 # Filesystems and the libraries/crypto they need, plus qemu_fw_cfg (lets
@@ -34,7 +37,7 @@ MODS_INPUT='^kernel/drivers/(hid|input|i2c|mfd|pinctrl)/'
 # Network drivers: every one larch OS's kernel has — all of drivers/net
 # (Ethernet, USB Ethernet, Wi-Fi incl. the DKMS-built Broadcom wl), Thunderbolt
 # networking — plus the 802.11 stack, rfkill and packet sockets (DHCP).
-MODS_NET='^kernel/(drivers/(net|thunderbolt|bcma|ssb)/|net/(wireless|mac80211|rfkill|packet)/)|^updates/(.*/)?wl[.]ko'
+MODS_NET='^kernel/(drivers/(net|thunderbolt|bcma|ssb)/|net/(wireless|mac80211|rfkill|packet)/)|^(updates|extra)/(.*/)?wl[.]ko'
 
 # copy_overlay <src> <root>: files mirroring their target paths, copied over
 # <root>. cp -a carries the checkout's modes, which a umask of 002 leaves
@@ -51,10 +54,11 @@ rootfs_kver() {
     echo "$k"
 }
 
+# Fedora's kernel package keeps the image beside its modules; nothing copies
+# it to /boot (kernel-install's plugins are disabled, see system/build.sh).
 find_vmlinuz() {
     local kver; kver=$(rootfs_kver)
-    if [ -f "$ROOTFS_DIR/boot/vmlinuz-$kver" ]; then echo "$ROOTFS_DIR/boot/vmlinuz-$kver"; return 0; fi
-    ls "$ROOTFS_DIR/boot/vmlinuz"* 2>/dev/null | sort -V | tail -1
+    echo "$ROOTFS_DIR/usr/lib/modules/$kver/vmlinuz"
 }
 
 copy_bin_with_libs() {
@@ -62,20 +66,29 @@ copy_bin_with_libs() {
     # its shared library dependencies resolved via the rootfs dynamic linker.
     local binary="$1" dst_root="$2"
 
+    # Fedora's /usr/sbin is a symlink to bin, so tools are found in /usr/bin.
+    # The initramfs's /usr/sbin is a real directory (larch-install, …) and the
+    # scripts call tools that shadow a busybox applet by /usr/sbin path
+    # (/usr/sbin/modprobe, /usr/sbin/e2fsck), so each gets a link there too.
     local src
-    src=$(find "$ROOTFS_DIR/usr/sbin" "$ROOTFS_DIR/usr/bin" \
-               -name "$binary" 2>/dev/null | head -1)
+    src=$(find "$ROOTFS_DIR/usr/bin/" "$ROOTFS_DIR/usr/sbin/" \
+               -maxdepth 1 -name "$binary" 2>/dev/null | head -1)
     [ -n "$src" ] || die "Binary '$binary' not found in larch OS rootfs"
 
     local rel="${src#$ROOTFS_DIR}"
+    rel="${rel//\/\//\/}"
     install -D "$src" "$dst_root$rel"
+    case "$rel" in
+        /usr/bin/*) mkdir -p "$dst_root/usr/sbin"
+                    ln -sf "$rel" "$dst_root/usr/sbin/$binary" ;;
+    esac
     info "  [bin] $binary → $rel"
 
-    # The dynamic linker. All Debian amd64 binaries name
+    # The dynamic linker (Fedora: /usr/lib64). All x86-64 glibc binaries name
     # /lib64/ld-linux-x86-64.so.2 as their interpreter; in the initramfs /lib64
     # is a real directory, so put the symlink inside it explicitly.
     local ldso_src ldso_rel
-    ldso_src=$(find "$ROOTFS_DIR/usr/lib" -name "ld-linux-x86-64.so.2" 2>/dev/null | head -1)
+    ldso_src=$(find "$ROOTFS_DIR/usr/lib64" "$ROOTFS_DIR/usr/lib" -maxdepth 1 -name "ld-linux-x86-64.so.2" 2>/dev/null | head -1)
     if [ -n "$ldso_src" ]; then
         ldso_src=$(readlink -f "$ldso_src" 2>/dev/null || echo "$ldso_src")
         ldso_rel="${ldso_src#$ROOTFS_DIR}"
@@ -101,7 +114,7 @@ copy_bin_with_libs() {
         real_rel="${real#$ROOTFS_DIR}"
         install -D "$real" "$dst_root$real_rel" 2>/dev/null || true
         # Soname symlink with an absolute target (the link and the file may be
-        # in different prefix dirs, /lib vs /usr/lib, on merged-usr Debian).
+        # in different directories, /lib64 vs /usr/lib64).
         if [ "$libsrc" != "$real" ]; then
             mkdir -p "$(dirname "$dst_root$lib")"
             ln -sf "$real_rel" "$dst_root$lib" 2>/dev/null || true
@@ -111,7 +124,7 @@ copy_bin_with_libs() {
 
 # init_initramfs_tree <build_dir> <init_script>
 # The skeleton every larch initramfs starts from: busybox with all its applets
-# in /bin, kmod's modprobe (the rootfs's modules are .ko.xz, which busybox
+# in /bin, kmod's modprobe (Fedora's modules are .ko.xz, which busybox
 # can't load), the init script and the shell libraries in /usr/lib/larch.
 init_initramfs_tree() {
     local build_dir="$1" init_src="$2" applet
@@ -119,7 +132,7 @@ init_initramfs_tree() {
     mkdir -p "$build_dir"/{bin,sbin,lib,lib64,usr/bin,usr/sbin,usr/lib/larch,dev,proc,sys,run,tmp,etc,mnt,sysroot}
 
     local busybox_bin="$ROOTFS_DIR/usr/bin/busybox"
-    [ -f "$busybox_bin" ] || die "busybox not found in the rootfs (busybox-static is in packages.list)"
+    [ -f "$busybox_bin" ] || die "busybox not found in the rootfs (busybox — static on Fedora — is in packages.list)"
     install -m 755 "$busybox_bin" "$build_dir/bin/busybox"
     for applet in $("$build_dir/bin/busybox" --list); do
         [ "$applet" = busybox ] || ln -sf busybox "$build_dir/bin/$applet"
@@ -185,7 +198,14 @@ bundle_modules() {
         # Unquoted on purpose: expands the glob names.
         for f in "$fwsrc"/$fw "$fwsrc"/$fw.xz "$fwsrc"/$fw.zst; do
             [ -e "$f" ] || continue
-            install -D -m 644 "$f" "$build_dir/usr/lib/firmware/${f#"$fwsrc"/}"
+            # A declared name can be a directory of per-board files
+            # (ath11k/WCN6855/hw2.0/nfa765/); copy it whole.
+            if [ -d "$f" ]; then
+                mkdir -p "$build_dir/usr/lib/firmware/${f#"$fwsrc"/}"
+                cp -aL "$f/." "$build_dir/usr/lib/firmware/${f#"$fwsrc"/}/"
+            else
+                install -D -m 644 "$f" "$build_dir/usr/lib/firmware/${f#"$fwsrc"/}"
+            fi
         done
     done < "$fwlist"
     mkdir -p "$build_dir/usr/lib/firmware"
@@ -203,8 +223,11 @@ bundle_network() {
         copy_bin_with_libs "$bin" "$build_dir"
     done
     install -D -m 755 "$SHARED_DIR/udhcpc.script" "$build_dir/usr/share/udhcpc/default.script"
-    install -D -m 644 "$ROOTFS_DIR/etc/ssl/certs/ca-certificates.crt" \
-        "$build_dir/etc/ssl/certs/ca-certificates.crt"
+    # release.sh passes curl --cacert /etc/ssl/certs/ca-certificates.crt;
+    # Fedora's extracted TLS bundle lives in /etc/pki/ca-trust.
+    local ca="$ROOTFS_DIR/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
+    [ -s "$ca" ] || die "No CA bundle in the rootfs ($ca; ca-certificates)"
+    install -D -m 644 "$ca" "$build_dir/etc/ssl/certs/ca-certificates.crt"
     printf 'hosts: files dns\n' > "$build_dir/etc/nsswitch.conf"
     printf '127.0.0.1\tlocalhost\n::1\tlocalhost\n' > "$build_dir/etc/hosts"
     printf 'root:x:0:0:root:/root:/bin/sh\n' > "$build_dir/etc/passwd"

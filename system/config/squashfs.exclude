@@ -19,9 +19,13 @@ sys/*
 home/*
 home/.*
 
-# vmlinuz, System.map, config, Debian's initrd: the kernel ships as the
+# Whatever lands in /boot (nothing, with kernel-install's plugins off): the kernel ships as the
 # release's vmlinuz (stage 9) and boots from LARCHEFI, so a copy here is never used.
 boot/*
 boot/.*
 
 root/.cache
+
+# Fedora keeps the kernel image beside its modules; it ships as the release's
+# vmlinuz (stage 9, taken from the base), so the images don't need a copy.
+usr/lib/modules/*/vmlinuz

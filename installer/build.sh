@@ -1,7 +1,7 @@
 #!/bin/bash
 # installer/build.sh — build the Larch OS installer ISO (runs inside the builder)
 #
-# The ISO holds only the installer: GRUB, Debian's kernel and
+# The ISO holds only the installer: GRUB, the system's (Fedora) kernel and
 # installer.initramfs. No system files — the installer downloads the system
 # release and desktop the user picks. The kernel, drivers, firmware and tools all come from the
 # system's base rootfs, so this needs work/rootfs from system stages 2-4
@@ -25,6 +25,7 @@ INITRAMFS="$WORK_DIR/installer.initramfs"
 ISO_ROOT="$WORK_DIR/installer-iso"
 OUTPUT_ISO="${LARCH_OUTPUT_DIR:-$ROOT_DIR/output}/larch-installer.iso"
 GRUB_EFI_DIR="/usr/lib/grub/x86_64-efi"
+GRUB_MKRESCUE=$(command -v grub-mkrescue || command -v grub2-mkrescue || true)   # Fedora: grub2-*
 
 # shellcheck source=../shared/build-lib.sh
 . "$ROOT_DIR/shared/build-lib.sh"
@@ -39,10 +40,11 @@ mkdir -p "$WORK_DIR"
 # ── Stage 1: check-deps ──────────────────────────────────────────────────────
 run_stage 1 "check-deps" && {
     MISSING=()
-    for cmd in xorriso grub-mkrescue cpio find gzip; do
+    [ -n "$GRUB_MKRESCUE" ] || die "Missing grub-mkrescue / grub2-mkrescue in the builder image"
+    for cmd in xorriso cpio find gzip; do
         command -v "$cmd" &>/dev/null || MISSING+=("$cmd")
     done
-    [ -f "$GRUB_EFI_DIR/modinfo.sh" ] || MISSING+=("grub-efi-amd64-bin (GRUB x86_64-efi platform)")
+    [ -f "$GRUB_EFI_DIR/modinfo.sh" ] || MISSING+=("grub2-efi-x64-modules (GRUB x86_64-efi platform)")
     if [ "${#MISSING[@]}" -gt 0 ]; then
         printf 'Missing build tools in the builder image: %s\n' "${MISSING[*]}" >&2
         exit 1
@@ -80,7 +82,7 @@ run_stage 2 "installer-initramfs — build installer.initramfs" && {
     done
     # OpenSSL 3 dlopens its provider modules — invisible to ldd. Without the
     # default provider, `openssl passwd -6` fails.
-    ossl_mods_src=$(find "$ROOTFS_DIR/usr/lib" -type d -name ossl-modules 2>/dev/null | head -1)
+    ossl_mods_src=$(find "$ROOTFS_DIR/usr/lib64" "$ROOTFS_DIR/usr/lib" -maxdepth 2 -type d -name ossl-modules 2>/dev/null | head -1)
     if [ -n "$ossl_mods_src" ]; then
         mkdir -p "$build_dir${ossl_mods_src#$ROOTFS_DIR}"
         cp -a "$ossl_mods_src/." "$build_dir${ossl_mods_src#$ROOTFS_DIR}/"
@@ -108,8 +110,8 @@ run_stage 4 "make-iso — grub-mkrescue (UEFI only)" && {
     # UEFI only: pinning one GRUB platform directory leaves out the BIOS El
     # Torito entry. LARCHISO is the ISO9660 volume label; the installer leaves
     # disks carrying it out of the target list.
-    grub-mkrescue -d "$GRUB_EFI_DIR" -o "$OUTPUT_ISO" "$ISO_ROOT" -- -volid LARCHISO 2>/dev/null || \
-        grub-mkrescue -d "$GRUB_EFI_DIR" -o "$OUTPUT_ISO" "$ISO_ROOT"
+    "$GRUB_MKRESCUE" -d "$GRUB_EFI_DIR" -o "$OUTPUT_ISO" "$ISO_ROOT" -- -volid LARCHISO 2>/dev/null || \
+        "$GRUB_MKRESCUE" -d "$GRUB_EFI_DIR" -o "$OUTPUT_ISO" "$ISO_ROOT"
     info "$OUTPUT_ISO ($(du -sh "$OUTPUT_ISO" | cut -f1))"
 }
 
