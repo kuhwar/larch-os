@@ -28,8 +28,8 @@ lsof
 strace
 less
 which
+# nano is the editor. (Arch's `vi` is ex-vi-compat, which pulls in full vim + vim-runtime, 44M.)
 nano
-vi
 curl
 wget
 ca-certificates

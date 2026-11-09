@@ -55,6 +55,30 @@
 /usr/lib/nvidia/xorg
 /usr/bin/nvidia-xconfig
 
+# NVIDIA's compute, ray-tracing and video-codec userspace. The Debian image
+# never had it (only the GL/EGL/Vulkan driver), and Flatpak apps bring their
+# own NVIDIA userspace (org.freedesktop.Platform.GL.nvidia): on the host only
+# gnome-shell/mutter use the driver, through GL/EGL/GBM/Vulkan.
+/usr/lib/libcuda.so*
+/usr/lib/libcudadebugger.so*
+/usr/lib/libnvidia-nvvm.so*
+/usr/lib/libnvidia-ptxjitcompiler.so*
+/usr/lib/libnvidia-rtcore.so*
+/usr/lib/libnvoptix.so*
+/usr/share/nvidia/nvoptix.bin
+/usr/lib/libnvcuvid.so*
+/usr/lib/libnvidia-encode.so*
+/usr/lib/libnvidia-opticalflow.so*
+/usr/lib/libnvidia-ngx.so*
+/usr/bin/nvidia-ngx-updater
+/usr/lib/nvidia/wine
+/usr/lib/libnvidia-pkcs11*.so*
+/etc/OpenCL/vendors/nvidia.icd
+
+# GObject-introspection XML: only for building against a library; at runtime
+# GNOME reads the compiled typelibs in /usr/lib/girepository-1.0.
+/usr/share/gir-1.0
+
 # ── Docs ─────────────────────────────────────────────────────────────────────
 # Translations (/usr/share/locale) and translated GNOME help are kept: every
 # language is selectable. /usr/share/i18n is only the source data locale-gen
@@ -115,6 +139,31 @@
 
 # ksu (krb5, setuid): Kerberos su; root is locked.
 /usr/bin/ksu
+
+# ── Tools dependencies drag in that can't run here or have no use ────────────
+# v4l-utils (via gst-plugins-good): Qt test tools, and there is no Qt.
+/usr/bin/qv4l2
+/usr/bin/qvidcap
+/usr/share/applications/qv4l2.desktop
+/usr/share/applications/qvidcap.desktop
+# HPLIP's GUIs need PyQt, which isn't installed; the CUPS backend/driver stay.
+/usr/share/applications/hplip.desktop
+/usr/share/applications/hp-uiscan.desktop
+/etc/xdg/autostart/hplip-systray.desktop
+# CUPS's web-interface launcher (GNOME Settings manages printers).
+/usr/share/applications/cups.desktop
+# hwloc (via appstream's onetbb): the library stays, its viewer goes.
+/usr/bin/lstopo
+/usr/share/applications/lstopo.desktop
+
+# Language bindings whose runtime only an optional dependency provides, which
+# orphan removal (clean-rootfs.sh) takes out: Imath's Python bindings (boost's
+# libboost_python; via openexr <- libvips <- appstream <- flatpak) and
+# Graphviz's Guile binding (via libmediainfo <- localsearch <- nautilus).
+# Nothing in the image loads either; the library guard demands they go too.
+/usr/lib/libPyImath*.so*
+/usr/lib/python3.*/site-packages/imath*.so
+/usr/lib/graphviz/guile
 
 # ── GUI bits of system-config-printer ────────────────────────────────────────
 # Only its D-Bus service (org.fedoraproject.Config.Printing) is needed, by

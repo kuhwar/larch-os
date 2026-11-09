@@ -243,8 +243,9 @@ run_stage 5 "desktops — install each desktop on a copy of the base" && {
         copy_overlay "$SYSTEM_DIR/rootfs-overlay" "$root"
         [ -d "$dsrc/rootfs-overlay" ] && copy_overlay "$dsrc/rootfs-overlay" "$root"
         info "[$de] Stripping the package manager"
-        chroot_run "$root" "$SYSTEM_DIR/scripts/clean-rootfs.sh" \
-            "$(merged_list remove.list "$de")" "$(merged_list remove-files.list "$de")"
+        deps=("$(merged_list remove.list "$de")" "$(merged_list remove-files.list "$de")")
+        [ -f "$dsrc/launcher.list" ] && deps+=("$dsrc/launcher.list:launcher.list")
+        chroot_run "$root" "$SYSTEM_DIR/scripts/clean-rootfs.sh" "${deps[@]}"
         # Root is mounted read-only, so NetworkManager can't rewrite
         # /etc/resolv.conf; point it at the file NM keeps in /run.
         rm -f "$root/etc/resolv.conf"

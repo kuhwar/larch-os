@@ -80,6 +80,18 @@ if [ "${#PURGE[@]}" -gt 0 ]; then
     pacman -Rddn --noconfirm --noprogressbar --noscriptlet "${PURGE[@]}"
 fi
 
+# What only the removed packages needed (base-devel's make -> guile, debugedit
+# -> gdb -> boost, …): dependencies nothing installed requires any more, until
+# none are left. -tt: a package only something's *optional* dependency (guile,
+# offered by gnutls for its Guile bindings) counts as unneeded too. Explicitly
+# installed packages never count; the library guard below checks the result.
+while _orphans=$(pacman -Qdttq 2>/dev/null) && [ -n "$_orphans" ]; do
+    # shellcheck disable=SC2086
+    log "  orphans: $(echo $_orphans)"
+    # shellcheck disable=SC2086
+    pacman -Rn --noconfirm --noprogressbar --noscriptlet $_orphans
+done
+
 # ── Delete files (remove-files.list) ─────────────────────────────────────────
 # Globs are expanded here, inside the chroot; unmatched ones expand to nothing.
 log "Deleting paths from remove-files.list"
@@ -115,6 +127,24 @@ done < "$GUARD/broken"
 rm -rf "$GUARD"
 [ "$BROKEN" -eq 0 ] || { echo "  [clean] remove.list/remove-files.list removed libraries the image needs" >&2; exit 1; }
 log "No needed shared library was removed"
+
+# ── Launcher allow-list (desktops/<desktop>/launcher.list) ───────────────────
+# Dependencies bring their own launchers (HP Device Manager, IBus Preferences,
+# Color Profile Viewer, …). Every .desktop entry the desktop's launcher.list
+# doesn't name is marked NoDisplay=true: still there for file associations and
+# D-Bus activation, just not in the app grid. No list: nothing is hidden.
+if [ -f /launcher.list ]; then
+    log "Hiding launchers not in launcher.list"
+    for _f in /usr/share/applications/*.desktop; do
+        [ -e "$_f" ] || continue
+        _id=$(basename "$_f")
+        list_entries /launcher.list | grep -qxF "$_id" && continue
+        grep -qE '^(NoDisplay|Hidden)=true' "$_f" && continue
+        sed -i -e '/^NoDisplay=/d' -e '0,/^\[Desktop Entry\]$/s//[Desktop Entry]\nNoDisplay=true/' "$_f"
+        log "  hidden: $_id"
+    done
+fi
+command -v update-desktop-database >/dev/null && update-desktop-database -q /usr/share/applications || true
 
 # Static and libtool archives, wherever they are.
 find /usr/lib \( -name '*.a' -o -name '*.la' \) -delete 2>/dev/null || true
@@ -155,6 +185,6 @@ log "Stamping /etc/.updated and /var/.updated"
 # ── Remove build scripts from rootfs ─────────────────────────────────────────
 log "Removing build scripts from rootfs"
 rm -f /setup-chroot.sh /setup-desktop.sh /desktop-setup.sh /desktop-packages.list \
-      /clean-rootfs.sh /packages.list /remove.list /remove-files.list
+      /clean-rootfs.sh /packages.list /remove.list /remove-files.list /launcher.list
 
 log "Rootfs clean complete"
