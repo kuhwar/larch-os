@@ -71,3 +71,7 @@ test-qemu: ## Boot the installer ISO + 20G test disk in QEMU (UEFI); installs if
 .PHONY: test-qemu-local
 test-qemu-local: ## Same, but install/update from the local output/system/ instead of GitHub
 	./test-qemu.sh --local
+
+.PHONY: test-auto
+test-auto: ## Unattended install + first boot of the local build in QEMU; fails on boot errors
+	./test-auto.sh

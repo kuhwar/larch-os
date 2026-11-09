@@ -52,7 +52,8 @@ When implementing features, default to the most minimal, opinionated, immutable 
 ## Repository layout
 
 ```
-docker-build.sh, docker-entrypoint.sh, Dockerfile, Makefile, test-qemu.sh
+docker-build.sh, docker-entrypoint.sh, Dockerfile, Makefile, test-qemu.sh, test-auto.sh
+tools/qmp.py            QMP client for test-auto.sh (keystrokes, screenshots)
 shared/
   build-lib.sh          initramfs assembly: busybox tree, kmod, module sets, firmware, tools, packing
   lib/{ui,hw,net,release}.sh   runtime libs in every initramfs, at /usr/lib/larch/
@@ -124,6 +125,8 @@ Stage 9 (vmlinuz, `BOOTX64.EFI`, `loader.tar`, `SHA256SUMS`) must follow any of 
 ./test-qemu.sh --local  # same, but serves output/system/ on 127.0.0.1:8088 and passes
                         # http://10.0.2.2:8088 as QEMU fw_cfg opt/larch/source → offered as release "local"
 ```
+
+**Unattended:** `./test-auto.sh` (`make test-auto`) does a fresh install of the local build on a blank disk and its first boot with no window: it serves `output/system/` like `--local`, answers the installer through QEMU's QMP socket (`tools/qmp.py`: keystrokes, screenshots), boots the installed system, logs in, powers off cleanly, reads the guest journal off LARCHCONF (`sfdisk`/`debugfs` from `work/rootfs`, so the host needs neither) and **exits 1 if anything logged an error before shutdown** other than `KNOWN_ERRORS` (the kernel's TDX line). Screenshots of every step (`i1-name` … `i5-complete`, `b1-login`, `b2-desktop`) and the journal go to `work/autotest/`; `./test-auto.sh boot` boots that disk again. ≈ 8 min, needs KVM. Run it after any change to the packages, the cleanup or the boot path.
 
 QEMU comes from host packages (`sudo make install-deps`) or a QEMU AppImage (`$QEMU_APPIMAGE`, a `qemu-system-x86_64` symlinked to one, or `~/Applications/*QEMU*.AppImage`; edk2's UEFI code is copied to `work/` and mapped as pflash). Extra args go to qemu. On real hardware the same override is the kernel argument `larch.source=<url>` (press `e` in GRUB / systemd-boot).
 
