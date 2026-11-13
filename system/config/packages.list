@@ -102,6 +102,9 @@ NetworkManager
 NetworkManager-wifi
 wpa_supplicant
 iw
+# ssh/scp/sftp/ssh-agent/ssh-keygen — client only: no sshd ships
+# (rootfs-overlay/etc/polkit-1/rules.d/99-larch-ssh.rules)
+openssh-clients
 
 # ── Time (chrony: Fedora's NTP client; timedated finds it for GNOME's
 #    "Automatic Date & Time") and location (GNOME's automatic time zone) ──────
