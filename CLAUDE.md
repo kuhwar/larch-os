@@ -201,7 +201,7 @@ Weak dependencies are never installed, so the lists name everything. `system/con
 
 ### Time, language, misc
 
-Time and timezone are automatic: `chrony` (timedated finds it via `ntp-units.d`), and (GNOME) `desktops/gnome/rootfs-overlay/usr/share/glib-2.0/schemas/90_larch.gschema.override` turns on `automatic-timezone` and Location Services (gsd-datetime via geoclue). `99-larch-datetime.rules` lets the active local session call timedated; `99-larch-cups.rules` grants cups-pk-helper's actions; `99-larch-flatpak.rules` likewise for Flatpak. The image ships every locale precompiled (`glibc-all-langpacks`); the user's language/avatar persist in `/var/lib/AccountsService` via the `/var` overlay.
+Time and timezone are automatic: `chrony` (timedated finds it via `ntp-units.d`), and (GNOME) `desktops/gnome/rootfs-overlay/usr/share/glib-2.0/schemas/90_larch.gschema.override` turns on `automatic-timezone` and Location Services (gsd-datetime via geoclue). `99-larch-datetime.rules` lets the active local session call timedated; `99-larch-cups.rules` grants cups-pk-helper's actions; `99-larch-flatpak.rules` likewise for Flatpak. `99-larch-udisks.rules` grants udisks2's `open-device` (removable drives only, not `open-device-system`), so Flathub image writers (Impression, Fedora Media Writer) can write a USB stick. The image ships every locale precompiled (`glibc-all-langpacks`); the user's language/avatar persist in `/var/lib/AccountsService` via the `/var` overlay.
 
 ### Clean boot (what the Fedora port had to fix)
 

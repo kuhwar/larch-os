@@ -1,0 +1,16 @@
+// larch-os — let the locally-seated active desktop user write disk images to
+// removable drives (USB sticks, SD cards) without a password prompt: Flathub's
+// image writers (Impression, Fedora Media Writer) open the device through
+// udisks2's OpenDevice, whose default is auth_admin_keep — and larch has no
+// admin (no sudo, the user isn't in `wheel`), so it would always be refused.
+//
+// Only "open-device", i.e. non-system devices (udisks' HintSystem=false:
+// removable media and USB-attached drives). "open-device-system" — the internal
+// disks holding LARCHSYS/LARCHCONF/LARCHHOME — stays admin-only, so no app can
+// overwrite the installed system this way.
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.freedesktop.udisks2.open-device" &&
+        subject.local && subject.active) {
+        return polkit.Result.YES;
+    }
+});
