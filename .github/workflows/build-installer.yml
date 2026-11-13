@@ -24,7 +24,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build installer ISO (privileged Docker)
         run: |
@@ -38,7 +38,7 @@ jobs:
           sha256sum larch-installer.iso > larch-installer.iso.sha256
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: larch-installer-iso
           path: |
@@ -47,7 +47,7 @@ jobs:
 
       - name: Publish Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # the installer is what new users start from: always "Latest"
           make_latest: 'true'
