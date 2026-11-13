@@ -103,6 +103,12 @@ NetworkManager-wifi
 wpa_supplicant
 iw
 
+# ── Git ──────────────────────────────────────────────────────────────────────
+# git-core: the git CLI without Perl/Python helpers (the `git` package pulls
+# ~70 more, Perl included). It requires openssh-clients, so ssh/scp/sftp/
+# ssh-agent ship too — client only: no sshd (99-larch-ssh.rules).
+git-core
+
 # ── Time (chrony: Fedora's NTP client; timedated finds it for GNOME's
 #    "Automatic Date & Time") and location (GNOME's automatic time zone) ──────
 chrony
