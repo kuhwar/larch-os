@@ -45,6 +45,10 @@ less
 file
 which
 kmod
+# Compressed swap in RAM (/dev/zram0) — the only swap. Configured by
+# rootfs-overlay/etc/systemd/zram-generator.conf (zram-generator-defaults,
+# Fedora's own config, is a weak dependency and not installed).
+zram-generator
 pciutils
 usbutils
 dmidecode

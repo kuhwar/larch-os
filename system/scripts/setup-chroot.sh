@@ -56,8 +56,8 @@ log "Enabling systemd services"
 systemctl enable NetworkManager bluetooth cups.socket avahi-daemon chronyd \
     switcheroo-control nvidia-suspend nvidia-resume nvidia-hibernate
 systemctl set-default graphical.target
-# systemd-oomd: Fedora's userspace OOM killer, which warns at every boot that
-# there is no swap (larch has none by design). The kernel's OOM killer stays.
+# systemd-oomd: Fedora's userspace OOM killer — masked, the kernel's OOM
+# killer is enough (swap is only zram, rootfs-overlay/etc/systemd/zram-generator.conf).
 systemctl disable systemd-oomd.service systemd-oomd.socket 2>/dev/null || true
 systemctl mask systemd-oomd.service systemd-oomd.socket
 systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber 2>/dev/null || true
