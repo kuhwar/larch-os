@@ -11,8 +11,8 @@
 #   Update LARCH         the update below
 #   Manage users         add a user, or delete one (with its password; its
 #                        home kept or deleted) — manage.sh
-#   Reset LARCH OS       LARCHCONF's /etc and /var layers back to how the
-#                        installer left them (accounts and computer name kept)
+#   Reset LARCH OS       LARCHCONF's /etc and /var layers emptied but for the
+#                        accounts, computer name and machine-id
 #   Boot into EFI setup  reboot into the firmware's setup (OsIndications)
 #
 # The update:

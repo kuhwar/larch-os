@@ -105,9 +105,9 @@ add_user() {
     fi
 
     msg "Add a user" "Adding $LARCH_USERNAME..."
-    # The supplementary groups of the account created at install.
-    _owner=$(awk -F: '$3 == 1000 { print $1; exit }' "$IMG_MNT/etc/passwd")
-    _groups=$(awk -F: -v u="$_owner" '("," $4 ",") ~ ("," u ",") { printf "%s%s", s, $1; s = "," }' \
+    # The groups the image gives its placeholder user (setup-chroot.sh), those
+    # that exist. No wheel: it is polkit's admin identity.
+    _groups=$(awk -F: '$1 == "audio" || $1 == "video" || $1 == "input" { printf "%s%s", s, $1; s = "," }' \
         "$IMG_MNT/etc/group")
     # A UID no account and no file in /home has had: a deleted user's kept home
     # (still owned by its old UID) must not pass to the next user. useradd -U
@@ -137,9 +137,9 @@ add_user() {
 # delete_user <name>
 delete_user() {
     _u="$1"
-    _uid=$(awk -F: -v u="$_u" '$1 == u { print $3 }' "$IMG_MNT/etc/passwd")
-    if [ "$_uid" = 1000 ]; then
-        note "Delete a user" "  $_u is the account created at installation; it can't be deleted."
+    # Without any user nobody could log in (there is no root login).
+    if [ "$(list_users | wc -l)" -le 1 ]; then
+        note "Delete a user" "  $_u is the only user; add another user before deleting it."
         return 0
     fi
 
@@ -207,7 +207,6 @@ manage_users() {
             IFS=$_old_ifs
             _name=${_l%%:*}; _rest=${_l#*:}; _uid=${_rest%%:*}; _full=${_rest#*:}
             _d="Delete  ${_full:-$_name}"
-            [ "$_uid" = 1000 ] && _d="${_full:-$_name}  (created at installation)"
             set -- "$@" "$_name" "$_d"
             _n=$((_n + 1))
         done
@@ -226,10 +225,9 @@ manage_users() {
     img_close
 }
 
-# Reset LARCH OS: LARCHCONF's layers rebuilt from the installed image as the
-# installer left them — the same accounts (passwords, full names), computer
-# name and machine-id, nothing else. Built as etc.new/var.new and swapped in
-# (cut-off safe, see conf.sh).
+# Reset LARCH OS: LARCHCONF's layers replaced by ones holding only the account
+# files, computer name and machine-id, copied as they are (conf.sh
+# rebuild_layers). Built as etc.new/var.new and swapped in (cut-off safe).
 reset_system() {
     dialog --colors --backtitle "$DIALOG_BT" --title " Reset LARCH OS " \
         --defaultno --yes-label "Reset" --no-label "Back" --yesno "
@@ -245,18 +243,12 @@ reset_system() {
 
     msg "Reset LARCH OS" "Resetting the system settings..."
     conf_mount || return 0
-    if ! mount -t squashfs -o ro,loop "$SYS_MNT/sys.squashfs" "$IMG_MNT"; then
-        conf_umount
-        note "Reset LARCH OS" "  Could not mount the installed system (sys.squashfs).\n  Nothing was changed."
-        return 0
-    fi
-    if ! rebuild_layers "$CONF_MNT" "$IMG_MNT"; then
+    if ! rebuild_layers "$CONF_MNT"; then
         rm -rf "$CONF_MNT/var.new" "$CONF_MNT/etc.new"   # var.new first (see sys/init)
-        umount "$IMG_MNT"; conf_umount
-        note "Reset LARCH OS" "  Could not rebuild the settings (config partition full,\n  or no user account found). Nothing was changed."
+        conf_umount
+        note "Reset LARCH OS" "  Could not rebuild the settings (config partition full,\n  or no account files found). Nothing was changed."
         return 0
     fi
-    umount "$IMG_MNT"
     swap_layers "$CONF_MNT" \
         || die "Could not put the reset settings in place on /dev/$TARGET_CONF. Reboot and pick \"Manage LARCH\" → \"Reset LARCH OS\" to retry."
     conf_umount

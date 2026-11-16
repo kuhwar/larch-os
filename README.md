@@ -193,8 +193,8 @@ The boot menu's **Manage LARCH** entry opens a menu with:
 - **Update LARCH** — the update described above.
 - **Manage users** — add a user (full name and password; the username is derived from the
   name, as at install), or delete one: it asks for that user's password, then whether to
-  delete their home folder and everything in it. The account created during install can't
-  be deleted.
+  delete their home folder and everything in it. Any user can be deleted, except the last
+  one.
 - **Reset LARCH OS** — returns the system settings to how they were right after
   installation: Wi-Fi networks, Bluetooth devices, printers, time zone and language
   settings, system-wide Flatpak apps and logs are removed. The user accounts and their
