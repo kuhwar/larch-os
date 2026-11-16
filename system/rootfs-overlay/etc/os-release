@@ -1,9 +1,9 @@
 NAME="Larch OS"
-VERSION="1.0"
+VERSION="dev"
 ID=larchos
 ID_LIKE=
-PRETTY_NAME="Larch OS 1.0"
-VERSION_ID="1.0"
+PRETTY_NAME="Larch dev"
+VERSION_ID=dev
 HOME_URL="https://github.com/larch-os/larch-os"
 SUPPORT_URL="https://github.com/larch-os/larch-os/issues"
 BUG_REPORT_URL="https://github.com/larch-os/larch-os/issues"

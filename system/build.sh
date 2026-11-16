@@ -396,6 +396,18 @@ run_stage 6 "make-squashfs — one sys-<desktop>.squashfs per desktop" && {
         mkdir -p "$root/usr/lib/larch"
         printf '%s\n' "$LARCH_VERSION" > "$root/usr/lib/larch/version"
         printf '%s\n' "$de" > "$root/usr/lib/larch/desktop"
+        # os-release carries the release too (GNOME Settings → About shows
+        # PRETTY_NAME): tag v0.7.2 → "Larch 0.7.2". /etc/os-release is a
+        # symlink to it. Rewritten from rootfs-overlay's template every run.
+        osrel="$root/usr/lib/os-release"
+        ver=${LARCH_VERSION#v}
+        [ -L "$root/etc/os-release" ] || cp -f "$root/etc/os-release" "$osrel"
+        sed -i -e "s/^VERSION=.*/VERSION=\"$ver\"/" \
+               -e "s/^VERSION_ID=.*/VERSION_ID=$ver/" \
+               -e "s/^PRETTY_NAME=.*/PRETTY_NAME=\"Larch $ver\"/" \
+               -e '/^IMAGE_VERSION=/d' "$osrel"
+        printf 'IMAGE_VERSION=%s\n' "$ver" >> "$osrel"
+        ln -sfn ../usr/lib/os-release "$root/etc/os-release"
         # systemd-tmpfiles' root.conf (`z / 555`) would try to chmod the
         # read-only root at every boot; ship it with that mode already.
         chmod 555 "$root"
