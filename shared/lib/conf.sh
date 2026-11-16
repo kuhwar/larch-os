@@ -3,20 +3,11 @@
 #
 # LARCHCONF (mounted at /conf on the running system) holds the upper layers of
 # the /etc and /var overlays that sys.initramfs mounts: etc/ + etc-work/,
-# var/ + var-work/. The installer creates them (seed_layers). A normal update
-# leaves them alone. Switching desktop rebuilds them on the new image
-# (rebuild_layers): the user's state below is carried over, everything else is
-# dropped so the new desktop starts from its image's own files.
-
-# User state that survives a desktop switch, relative to /etc and /var. The
-# identity files (hostname, hosts, machine-id) and the account databases are
-# not listed: they are rewritten on the new image (apply_machine_config).
-KEEP_ETC="NetworkManager/system-connections cups/printers.conf cups/classes.conf
-cups/subscriptions.conf cups/ppd localtime timezone adjtime locale.conf
-vconsole.conf X11/xorg.conf.d/00-keyboard.conf"
-KEEP_VAR="lib/NetworkManager lib/bluetooth lib/AccountsService lib/cups lib/flatpak
-lib/systemd/backlight lib/systemd/rfkill lib/systemd/timers lib/chrony
-log/journal"
+# var/ + var-work/. The installer creates them (seed_layers). Updates leave
+# them alone, desktop switches included. "Reset LARCH OS" (Manage LARCH)
+# rebuilds them on the installed image (rebuild_layers + swap_layers) keeping
+# nothing but the identity and the accounts: the system as it was after the
+# install.
 
 # Write this machine's identity files into <out-dir> (an /etc upper layer):
 # hostname, hosts, machine-id, and the account databases with the user in place
@@ -24,7 +15,10 @@ log/journal"
 # image's file and is rewritten with `cat >`, so it keeps the image's owner and
 # mode (e.g. shadow: root:shadow 0640) — the same result as an overlay copy-up.
 # <config-dir> holds hostname, hosts, machine-id, and passwd/shadow with the
-# user's single line each.
+# user's single line each; optionally the users added later (Manage LARCH →
+# Manage users) as read_machine_config writes them: extra-{passwd,shadow,
+# group,gshadow,subuid,subgid} (their lines) and extra-members (group:user per
+# supplementary membership).
 # Usage: apply_machine_config <image-root> <config-dir> <username> <out-dir>
 apply_machine_config() {
     _root="$1"; _cfg="$2"; _user="$3"; _out="$4"
@@ -64,6 +58,27 @@ apply_machine_config() {
             rm -f "$_cfg/$_f.new"
         done
     fi
+
+    if [ -s "$_cfg/extra-passwd" ]; then
+        for _f in passwd shadow group gshadow subuid subgid; do
+            [ -s "$_cfg/extra-$_f" ] || continue
+            cat "$_cfg/extra-$_f" >> "$_out/$_f"
+        done
+        # Their memberships, in the groups the new image still has.
+        for _f in group gshadow; do
+            awk -F: -v OFS=: '
+                NR == FNR { add[$1] = add[$1] " " $2; next }
+                ($1 in add) {
+                    n = split(add[$1], u, " ")
+                    for (i = 1; i <= n; i++)
+                        if (("," $4 ",") !~ ("," u[i] ","))
+                            $4 = ($4 == "" ? u[i] : $4 "," u[i])
+                }
+                { print }' "$_cfg/extra-members" "$_out/$_f" > "$_cfg/$_f.new"
+            cat "$_cfg/$_f.new" > "$_out/$_f"
+            rm -f "$_cfg/$_f.new"
+        done
+    fi
     unset _root _cfg _user _out _f
 }
 
@@ -84,7 +99,8 @@ seed_layers() {
 
 # read_machine_config <etc-upper> <config-dir>: the identity of an installed
 # machine (as written by the installer and changed since — password, full
-# name) into <config-dir>, in apply_machine_config's format. Sets CONF_USER.
+# name), and the users added since, into <config-dir>, in
+# apply_machine_config's format. Sets CONF_USER.
 read_machine_config() {
     mkdir -p "$2"
     for _f in hostname hosts machine-id; do
@@ -97,38 +113,31 @@ read_machine_config() {
     grep "^$CONF_USER:" "$1/shadow" 2>/dev/null | head -1 > "$2/shadow"
     [ -s "$2/shadow" ] || return 1
     chmod 600 "$2/shadow"
-}
 
-# mkparents <old-root> <new-root> <rel>: the parent directories of <rel> in
-# <new-root>, with the owner and mode they have in <old-root>.
-mkparents() {
-    _d="${3%/*}"
-    [ "$_d" != "$3" ] || return 0
-    _acc=""
-    for _c in $(echo "$_d" | tr '/' ' '); do
-        _acc="${_acc:+$_acc/}$_c"
-        [ -d "$2/$_acc" ] && continue
-        mkdir "$2/$_acc" || return 1
-        if [ -d "$1/$_acc" ]; then
-            chown "$(stat -c %u:%g "$1/$_acc")" "$2/$_acc"
-            chmod "$(stat -c %a "$1/$_acc")" "$2/$_acc"
+    # The other regular users (UID 1001–59999), each with its private group.
+    awk -F: '$3 >= 1001 && $3 < 60000' "$1/passwd" > "$2/extra-passwd"
+    : > "$2/extra-members"
+    for _f in shadow group gshadow subuid subgid; do : > "$2/extra-$_f"; done
+    chmod 600 "$2/extra-shadow" "$2/extra-gshadow"
+    while IFS=: read -r _n _x _uid _gid _rest; do
+        grep "^$_n:" "$1/shadow"  2>/dev/null | head -1 >> "$2/extra-shadow"
+        grep "^$_n:" "$1/subuid"  2>/dev/null | head -1 >> "$2/extra-subuid"
+        grep "^$_n:" "$1/subgid"  2>/dev/null | head -1 >> "$2/extra-subgid"
+        _g=$(awk -F: -v g="$_gid" '$3 == g { print $1; exit }' "$1/group")
+        if [ -n "$_g" ] && [ "$_gid" -ge 1001 ]; then
+            grep "^$_g:" "$1/group"   | head -1 >> "$2/extra-group"
+            grep "^$_g:" "$1/gshadow" 2>/dev/null | head -1 >> "$2/extra-gshadow"
         fi
-    done
+        awk -F: -v u="$_n" -v p="$_g" '$1 != p && ("," $4 ",") ~ ("," u ",") { print $1 ":" u }' \
+            "$1/group" >> "$2/extra-members"
+    done < "$2/extra-passwd"
+    unset _f _n _x _uid _gid _rest _g
 }
 
-# keep_state <old-upper> <new-upper> <paths>: copy what exists of <paths>.
-keep_state() {
-    for _p in $3; do
-        [ -e "$1/$_p" ] || [ -L "$1/$_p" ] || continue
-        mkparents "$1" "$2" "$_p" || return 1
-        rm -rf "${2:?}/$_p"
-        cp -a "$1/$_p" "$2/$_p" || return 1
-    done
-}
-
-# rebuild_layers <conf-mount> <new-image-root>: LARCHCONF's layers for a
-# different desktop, built beside the current ones as etc.new/ and var.new/
-# (swap_layers puts them in place). The current layers are left as they are.
+# rebuild_layers <conf-mount> <image-root>: fresh layers for <image-root> with
+# only this machine's identity and accounts, built beside the current ones as
+# etc.new/ and var.new/ (swap_layers puts them in place). The current layers
+# are left as they are.
 rebuild_layers() {
     _conf="$1"; _img="$2"; _cfg="$RUN/machine-config"
     # var.new first: sys.initramfs reads var.new without etc.new as a swap
@@ -137,13 +146,6 @@ rebuild_layers() {
     read_machine_config "$_conf/etc" "$_cfg" || return 1
     seed_layers "$_img" "$_cfg" "$CONF_USER" "$_conf/etc.new" "$_conf/var.new" || return 1
     rm -rf "$_cfg"
-    keep_state "$_conf/etc" "$_conf/etc.new" "$KEEP_ETC" || return 1
-    keep_state "$_conf/var" "$_conf/var.new" "$KEEP_VAR" || return 1
-    # The session the user last picked belonged to the old desktop.
-    for _u in "$_conf"/var.new/lib/AccountsService/users/*; do
-        [ -f "$_u" ] && sed -i '/^Session=/d; /^XSession=/d' "$_u"
-    done
-    return 0
 }
 
 # swap_layers <conf-mount>: put etc.new/ and var.new/ in place (renames), with

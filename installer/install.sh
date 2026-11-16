@@ -28,7 +28,7 @@
 #   5. Download the release onto LARCHSYS, verify it, install it, write the
 #      machine config, reboot.
 #
-# Every run is a clean install. Updates are done by the "Update LARCH" boot
+# Every run is a clean install. Updates are done by the "Manage LARCH" boot
 # entry (system/updater/update.sh), which replaces the same files.
 
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
@@ -40,6 +40,7 @@ DIE_TITLE="Installation failed"
 . /usr/lib/larch/net.sh
 . /usr/lib/larch/release.sh
 . /usr/lib/larch/conf.sh
+. /usr/lib/larch/account.sh
 . /usr/lib/larch/helpers.sh
 . /usr/lib/larch/disk.sh
 . /usr/lib/larch/config-form.sh
@@ -67,7 +68,7 @@ wait_for_keyboard
 form_config
 net_up
 lookup_releases
-choose_release "" "$(default_release)" Reboot
+choose_release "" "$(default_release)" Reboot || do_reboot
 
 while true; do
 

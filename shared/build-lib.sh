@@ -24,7 +24,7 @@ list_entries() { sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' 
 #
 # Filesystems and the libraries/crypto they need, plus qemu_fw_cfg (lets
 # test-qemu.sh point the installer/updater at a local build, see release.sh).
-MODS_BASE='^kernel/(fs/(squashfs|overlayfs|ext4|jbd2|fat|nls|isofs)/|fs/mbcache[.]ko|lib/|crypto/|arch/x86/crypto/|drivers/firmware/qemu_fw_cfg[.]ko)'
+MODS_BASE='^kernel/(fs/(squashfs|overlayfs|ext4|jbd2|fat|nls|isofs|efivarfs)/|fs/mbcache[.]ko|lib/|crypto/|arch/x86/crypto/|drivers/firmware/qemu_fw_cfg[.]ko)'
 # Disk drivers: every storage driver larch OS's kernel has, whole directories,
 # nothing hand-picked — SATA/PATA, NVMe, all of SCSI (incl. SAS/RAID HBAs and
 # the VM controllers), md/device-mapper, virtio/Xen/Hyper-V block, eMMC/SD,

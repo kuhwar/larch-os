@@ -1,11 +1,12 @@
 #!/bin/sh
 # larch-os updater.initramfs init — PID 1
 #
-# Booted by the "Update LARCH" systemd-boot entry on an installed disk
+# Booted by the "Manage LARCH" systemd-boot entry on an installed disk
 # (system/bootloader/entries/larch-update.conf): LARCHEFI's kernel plus this
 # initramfs. It sets up the pseudo filesystems and hands the console to
 # /usr/sbin/larch-update (system/updater/update.sh), which does everything
-# else (drivers, network, download, install) and reboots.
+# else (drivers, the Manage LARCH menu: update, users, reset, EFI setup) and
+# reboots.
 #
 # Carries its own storage, network and input drivers and firmware
 # (system/build.sh stage 8) and never reads LARCHSYS for them, so it still

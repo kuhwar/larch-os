@@ -8,7 +8,7 @@
 #   sys-<desktop>.squashfs  one OS root per desktop (gnome, kde, …) → LARCHSYS:/sys.squashfs
 #   vmlinuz                 Fedora's kernel          → LARCHEFI:/larch-os/vmlinuz
 #   sys.initramfs           boots the system         → LARCHEFI:/larch-os/sys.initramfs
-#   updater.initramfs       the "Update LARCH" entry → LARCHEFI:/larch-os/updater.initramfs
+#   updater.initramfs       the "Manage LARCH" entry → LARCHEFI:/larch-os/updater.initramfs
 #   BOOTX64.EFI             systemd-boot             → LARCHEFI:/EFI/BOOT/BOOTX64.EFI
 #   loader.tar              loader/loader.conf + loader/entries/*.conf → LARCHEFI:/loader/
 #   SHA256SUMS              sha256sum of all of them
@@ -170,7 +170,7 @@ default_release() {
 
 # choose_release <installed-name> <default-name> <cancel-label>: menu of every
 # listed entry (larch-<desktop>-<tag>); the installed one is marked. Cancel
-# reboots.
+# returns 1.
 choose_release() {
     set -- "$1" "$2" "$3"
     _installed="$1"; _default="$2"; _cancel="$3"
@@ -190,7 +190,7 @@ choose_release() {
     dialog --backtitle "$DIALOG_BT" --title " Larch OS " \
         --ok-label "Select" --cancel-label "$_cancel" --default-item "$_default" \
         --menu "\nOnline via $NET_DESC.\n\nChoose the Larch OS desktop and version to install:" \
-        $(( _h + 9 )) 72 "$_h" "$@" 2>"$DIALOG_TMP" || do_reboot
+        $(( _h + 10 )) 72 "$_h" "$@" 2>"$DIALOG_TMP" || return 1
     select_release "$(cat "$DIALOG_TMP")"
 }
 

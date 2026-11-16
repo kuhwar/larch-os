@@ -5,7 +5,7 @@
 # blank disk falls through to the ISO (installer) and an installed one boots
 # the system. Delete work/test-disk.img to test a fresh install again.
 #
-# The installer and "Update LARCH" download the system from GitHub releases.
+# The installer and "Manage LARCH" download the system from GitHub releases.
 # With --local they use the local build in output/system/ instead: it is
 # served on 127.0.0.1:8088 (python3 or busybox httpd) and handed to the guest
 # as the QEMU fw_cfg entry opt/larch/source (shared/lib/release.sh), where it
@@ -100,6 +100,8 @@ fi
 [[ -f "$DISK" ]] || "${qemu_img[@]}" create -f qcow2 "$DISK" 20G
 
 # Not exec'd: with --local the file server is stopped when QEMU exits.
+# A USB keyboard: OVMF doesn't see QEMU's PS/2 keyboard here, so without it
+# holding Space can't open systemd-boot's hidden menu (Manage LARCH).
 "${qemu_system[@]}" \
     -enable-kvm \
     -m 4G \
@@ -111,6 +113,7 @@ fi
     -drive file="$ISO",media=cdrom,readonly=on,if=none,id=cd \
     -device ide-cd,drive=cd,bootindex=1 \
     -vga virtio \
+    -device qemu-xhci -device usb-kbd \
     -display gtk,gl=off \
     -full-screen \
     -device virtio-net,netdev=net0 \

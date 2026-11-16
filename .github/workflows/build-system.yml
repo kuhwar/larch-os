@@ -2,7 +2,7 @@ name: Build system
 
 # Builds the Larch OS system release inside the privileged Docker builder (the
 # same ./docker-build.sh used locally) and publishes its files as a GitHub
-# Release — what the installer ISO and the "Update LARCH" boot entry download
+# Release — what the installer ISO and the "Manage LARCH" boot entry download
 # (shared/lib/release.sh):
 #
 #   sys-<desktop>.squashfs (one per system/desktops/<desktop>)

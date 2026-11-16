@@ -55,7 +55,7 @@ disk_has_larch() {
 # dialog --menu of installable disks; selection (a /dev path) lands in TARGET_DISK.
 # Disks that already carry a larch-os install are marked and listed first, with the
 # first such disk pre-selected. Installing always erases the chosen disk;
-# in-place updates are the "Update LARCH" boot entry (system/updater/update.sh).
+# in-place updates are the "Manage LARCH" boot entry (system/updater/update.sh).
 # ESC re-shows the dialog. Restart button calls do_reboot.
 pick_disk_dialog() {
     _skip=" $(installer_disks | tr '\n' ' ') "

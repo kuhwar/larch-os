@@ -6,7 +6,7 @@ known-good state. You get a clean GNOME (Wayland) desktop, and you install apps 
 [Flatpaks](https://flatpak.org/) from [Flathub](https://flathub.org/). Your files and
 settings live in `/home` and are kept separate from the OS.
 
-It is built from Fedora packages and is intentionally simple: one user, automatic (DHCP)
+It is built from Fedora packages and is intentionally simple: automatic (DHCP)
 networking, no package manager to fiddle with, no options to get lost in.
 
 ---
@@ -22,7 +22,7 @@ networking, no package manager to fiddle with, no options to get lost in.
 >   the system: it downloads the latest Larch OS release during installation (about
 >   1–2 GB), over a network cable or Wi-Fi.
 >
-> - **Updates are still young.** The **Update LARCH** boot-menu entry replaces the
+> - **Updates are still young.** The boot menu's **Manage LARCH → Update LARCH** replaces the
 >   system and keeps your settings and `/home`, but the format still changes between
 >   releases. Keep backups. Systems installed before the current disk layout need one
 >   full reinstall, which **wipes the disk — including your `/home`.**
@@ -38,7 +38,7 @@ networking, no package manager to fiddle with, no options to get lost in.
   come — switchable later from the updater.
 - Flathub preconfigured; install any app with the `flatpak` command.
 - A persistent home directory on its own partition.
-- A locked-down, zero-decision setup: one user account, DHCP networking, no root login,
+- A locked-down, zero-decision setup: user accounts managed only from the boot menu, DHCP networking, no root login,
   no SSH, no package manager.
 
 ## Requirements
@@ -171,25 +171,40 @@ This is by design: it makes the system predictable and very hard to break.
 
 ## Updating
 
-Pick **Update LARCH** in the boot menu (it shows for 3 seconds at startup). The
-updater gets online (cable, or it asks for a Wi-Fi network) and lists the last five Larch OS
+Hold a key (e.g. Space) while the computer starts to show the boot menu, pick
+**Manage LARCH**, then **Update LARCH**. The updater gets online (cable, or it asks for a Wi-Fi network) and lists the last five Larch OS
 releases for every desktop — `larch-gnome-v0.1.5`, `larch-cosmic-v0.1.5`,
 `larch-gnome-v0.1.4`, … — and installs the one you choose: the new system is downloaded
 and verified first, then swapped in. Your settings, apps and `/home` are kept, and the disk
 is not repartitioned.
 
-**Switching desktop** works the same way: pick an entry with another desktop. The system
-settings are reset for the new desktop, except your account and password, the computer's
-name, network connections, Bluetooth devices, printers, time zone, language, system
-Flatpak apps and logs. Your files in `/home` stay as they are.
+**Switching desktop** works the same way: pick an entry with another desktop. Only the
+system files are replaced: the user accounts, every system setting and your files in `/home`
+stay as they are. If the new desktop misbehaves, **Reset LARCH OS** (below) returns the
+system settings to how they were right after installation.
 
-If an update is interrupted, the system may not start until you pick **Update LARCH**
-again and finish it. Keep backups anyway: the update format is still young.
+If an update is interrupted, the system may not start until you pick **Manage LARCH →
+Update LARCH** again and finish it. Keep backups anyway: the update format is still young.
+
+## Managing Larch OS
+
+The boot menu's **Manage LARCH** entry opens a menu with:
+
+- **Update LARCH** — the update described above.
+- **Manage users** — add a user (full name and password; the username is derived from the
+  name, as at install), or delete one: it asks for that user's password, then whether to
+  delete their home folder and everything in it. The account created during install can't
+  be deleted.
+- **Reset LARCH OS** — returns the system settings to how they were right after
+  installation: Wi-Fi networks, Bluetooth devices, printers, time zone and language
+  settings, system-wide Flatpak apps and logs are removed. The user accounts and their
+  passwords, the computer's name and everything in `/home` are kept.
+- **Boot into EFI setup** — restarts into the computer's firmware setup.
 
 ## Limitations (by design)
 
-- **One user.** The account created during install is the only one; there's no way to add
-  or remove users afterward.
+- **Users are managed from the boot menu only.** GNOME Settings can't add or remove users;
+  use **Manage LARCH → Manage users**.
 - **Networking is automatic (DHCP) only.** There's no network configuration UI.
 - **Apps via Flatpak (or AppImage) only.** No `apt`, no system package manager.
 - **Updates need a network** — there is no offline update.

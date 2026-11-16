@@ -9,7 +9,7 @@
 #   sys-<desktop>.squashfs  one OS root per desktop (installed as LARCHSYS:/sys.squashfs)
 #   vmlinuz                 Fedora's kernel — the same for every desktop
 #   sys.initramfs           boots the system: mounts the root and /etc, /var
-#   updater.initramfs       the "Update LARCH" boot entry
+#   updater.initramfs       the "Manage LARCH" boot entry
 #   BOOTX64.EFI, loader.tar systemd-boot and its configuration
 #   SHA256SUMS
 #
@@ -435,6 +435,7 @@ run_stage 8 "updater-initramfs — build updater.initramfs" && {
     bundle_dialog "$build_dir" updater
     copy_bin_with_libs e2fsck "$build_dir"
     install -m 755 "$SYSTEM_DIR/updater/update.sh" "$build_dir/usr/sbin/larch-update"
+    install -m 644 "$SYSTEM_DIR/updater/manage.sh" "$build_dir/usr/lib/larch/manage.sh"
     pack_initramfs "$build_dir" "$OUT_DIR/updater.initramfs"
 }
 
