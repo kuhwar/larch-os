@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Sawmill
+Comment=Find, install and update apps
+Exec=/opt/sawmill/Sawmill.AppImage %U
+TryExec=/opt/sawmill/Sawmill.AppImage
+Icon=io.sawmill.Store
+Terminal=false
+Categories=GNOME;GTK;System;PackageManager;
+Keywords=app;store;software;install;appimage;
+StartupNotify=true
+StartupWMClass=io.sawmill.Store

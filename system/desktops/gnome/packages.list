@@ -15,7 +15,7 @@ adwaita-icon-theme
 adwaita-sans-fonts
 adwaita-mono-fonts
 nautilus
-gnome-terminal
+# No terminal: the app manager is Sawmill (AppImages, base image: /opt/sawmill).
 gvfs
 gvfs-fuse
 gvfs-smb
@@ -24,7 +24,7 @@ gvfs-gphoto2
 gvfs-afc
 gvfs-nfs
 # No image viewer / PDF viewer / text editor in the core image — the core
-# desktop is Nautilus + GNOME Terminal only. Users get Loupe, Papers, Text
+# desktop is Nautilus + Sawmill only. Users get Loupe, Papers, Text
 # Editor etc. from Flathub.
 
 # ── Portal ───────────────────────────────────────────────────────────────────

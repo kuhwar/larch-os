@@ -22,7 +22,7 @@
 # Stages:
 #   1. check-deps        — verify build tools
 #   2. bootstrap         — Fedora's filesystem + generic-release into work/rootfs
-#   3. base-overlay      — merge rootfs-overlay/
+#   3. base-overlay      — merge rootfs-overlay/, the latest Sawmill AppImage
 #   4. base-configure    — packages.list, the kmods (akmods), scripts/setup-chroot.sh
 #   5. desktops          — per desktop: copy the base to work/desktops/<desktop>,
 #                          install its packages, run its setup, apply its
@@ -165,6 +165,49 @@ copy_resolv() {
     cp /etc/resolv.conf "$1/etc/resolv.conf"
 }
 
+# ── Sawmill (the app manager) ────────────────────────────────────────────────
+# install_sawmill <root>: the latest Sawmill release's x86_64 AppImage
+# (github.com/kuhwar/sawmill) at /opt/sawmill/Sawmill.AppImage, its icon in
+# hicolor; the launcher is rootfs-overlay/usr/share/applications/
+# io.sawmill.Store.desktop. Verified against the asset digest GitHub's API
+# publishes; cached in work/sawmill/<tag>/ so a re-run only checks the tag.
+SAWMILL_REPO=kuhwar/sawmill
+SAWMILL_ASSET=Sawmill-x86_64.AppImage
+install_sawmill() {
+    local root=$1 json tag sum dir auth=()
+    [ -n "${GITHUB_TOKEN:-}" ] && auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
+    json=$(curl -fsSL ${auth[@]+"${auth[@]}"} -H 'Accept: application/vnd.github+json' \
+        "https://api.github.com/repos/$SAWMILL_REPO/releases/latest") \
+        || die "Cannot read the latest Sawmill release from GitHub's API"
+    tag=$(printf '%s\n' "$json" | sed -n 's/^  "tag_name": *"\([^"]*\)".*/\1/p' | head -1)
+    # The asset objects list "name" before "digest"; take the digest that
+    # follows our asset's name.
+    sum=$(printf '%s\n' "$json" | awk -v a="$SAWMILL_ASSET" '
+        /"name":/   { hit = index($0, "\"" a "\"") > 0 }
+        /"digest":/ && hit { sub(/.*"sha256:/, ""); sub(/".*/, ""); print; exit }')
+    [ -n "$tag" ] || die "No tag_name in Sawmill's latest release"
+    [[ $sum =~ ^[0-9a-f]{64}$ ]] || die "Sawmill $tag has no sha256 digest for $SAWMILL_ASSET"
+    dir="$WORK_DIR/sawmill/$tag"
+    if ! echo "$sum  $dir/$SAWMILL_ASSET" | sha256sum -c --status 2>/dev/null; then
+        info "Downloading Sawmill $tag"
+        rm -rf "$WORK_DIR/sawmill"; mkdir -p "$dir"
+        curl -fsSL -o "$dir/$SAWMILL_ASSET" \
+            "https://github.com/$SAWMILL_REPO/releases/download/$tag/$SAWMILL_ASSET" \
+            || die "Sawmill $tag: download failed"
+        echo "$sum  $dir/$SAWMILL_ASSET" | sha256sum -c --status \
+            || die "Sawmill $tag: $SAWMILL_ASSET does not match its sha256 digest"
+        curl -fsSL -o "$dir/io.sawmill.Store.png" \
+            "https://raw.githubusercontent.com/$SAWMILL_REPO/$tag/client/data/icons/io.sawmill.Store.png" \
+            || die "Sawmill $tag: icon download failed"
+    else
+        info "Sawmill $tag already downloaded"
+    fi
+    install -D -m 0755 "$dir/$SAWMILL_ASSET" "$root/opt/sawmill/Sawmill.AppImage"
+    printf '%s\n' "$tag" | install -m 0644 /dev/stdin "$root/opt/sawmill/version"
+    install -D -m 0644 "$dir/io.sawmill.Store.png" \
+        "$root/usr/share/icons/hicolor/512x512/apps/io.sawmill.Store.png"
+}
+
 # ── Shared-library guard ─────────────────────────────────────────────────────
 # What stage 5 strips must not be a library anything left in the image links.
 # guard_record <root> before stripping; guard_check <root> after: every
@@ -246,9 +289,10 @@ run_stage 2 "bootstrap — Fedora $FEDORA_RELEASE filesystem into work/rootfs" &
 }
 
 # ── Stage 3: base-overlay ────────────────────────────────────────────────────
-run_stage 3 "base-overlay — merge rootfs-overlay" && {
+run_stage 3 "base-overlay — merge rootfs-overlay, install Sawmill" && {
     require_rootfs
     copy_overlay "$SYSTEM_DIR/rootfs-overlay" "$ROOTFS_DIR"
+    install_sawmill "$ROOTFS_DIR"
 }
 
 # ── Stage 4: base-configure ──────────────────────────────────────────────────

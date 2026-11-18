@@ -77,7 +77,7 @@ DOCKER_RUN_ARGS=(
     -v "$OUTPUT_DIR:/output"          # release files + ISO go here
     -e "LARCH_OUTPUT_DIR=/output"
 )
-for _var in LARCH_VERSION LARCH_DESKTOPS; do
+for _var in LARCH_VERSION LARCH_DESKTOPS GITHUB_TOKEN; do
     if [ -n "${!_var:-}" ]; then DOCKER_RUN_ARGS+=(-e "$_var=${!_var}"); fi
 done
 

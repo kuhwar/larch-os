@@ -27,3 +27,8 @@ picture-options='zoom'
 # No distribution logo on the login screen.
 [org.gnome.login-screen]
 logo=''
+
+# The dash: Files and Sawmill, the app manager (Fedora's default lists apps
+# the image doesn't ship).
+[org.gnome.shell]
+favorite-apps=['org.gnome.Nautilus.desktop', 'io.sawmill.Store.desktop']

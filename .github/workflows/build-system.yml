@@ -41,6 +41,7 @@ jobs:
         # is visible right before the failure.
         env:
           LARCH_VERSION: ${{ github.ref_name }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # Sawmill lookup: no anonymous API rate limit
         run: |
           ( while true; do
               printf '[disk %s] ' "$(date -u +%H:%M:%S)"

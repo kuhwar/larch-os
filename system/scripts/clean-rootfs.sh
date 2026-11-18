@@ -70,6 +70,11 @@ ldconfig
 # package scriptlets compile them, but not in a build root.
 if command -v dconf >/dev/null; then dconf update; fi
 if command -v fc-cache >/dev/null; then fc-cache -s >/dev/null 2>&1 || true; fi
+# hicolor's cache must be newer than every icon in it (e.g. Sawmill's, added
+# by the build), or GTK ignores it.
+if command -v gtk-update-icon-cache >/dev/null && [ -f /usr/share/icons/hicolor/index.theme ]; then
+    gtk-update-icon-cache -q -f /usr/share/icons/hicolor || true
+fi
 
 # ── Mark /etc and /var as up to date with /usr ───────────────────────────────
 # ConditionNeedsUpdate= (ldconfig, systemd-sysusers, systemd-update-done)
