@@ -24,8 +24,8 @@ gvfs-gphoto2
 gvfs-afc
 gvfs-nfs
 # No image viewer / PDF viewer / text editor in the core image — the core
-# desktop is Nautilus + Sawmill only. Users get Loupe, Papers, Text
-# Editor etc. from Flathub.
+# desktop is Nautilus + Sawmill only. Users get viewers, editors etc. as
+# AppImages from Sawmill.
 
 # ── Portal ───────────────────────────────────────────────────────────────────
 xdg-desktop-portal-gnome

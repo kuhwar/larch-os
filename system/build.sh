@@ -158,8 +158,8 @@ merged_list() {
     echo "$out"
 }
 
-# copy_resolv <root>: the builder's resolv.conf for scriptlets that need the
-# network (flatpak remote-add), without following the image's symlink.
+# copy_resolv <root>: the builder's resolv.conf for package scriptlets and
+# chrooted steps that need the network, without following the image's symlink.
 copy_resolv() {
     rm -f "$1/etc/resolv.conf"
     cp /etc/resolv.conf "$1/etc/resolv.conf"

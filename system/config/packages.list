@@ -79,11 +79,7 @@ plymouth
 plymouth-scripts
 plymouth-theme-spinner
 
-# ── Flatpak / portals ────────────────────────────────────────────────────────
-flatpak
-# flatpak verifies remotes' GPG signatures with gpg (only a weak dependency):
-# without it Flathub can't be added and nothing installs from it.
-gnupg2
+# ── Portals (file chooser, screen sharing, … for AppImage apps) ──────────────
 xdg-desktop-portal
 xdg-utils
 xdg-user-dirs

@@ -19,12 +19,6 @@
 /etc/distro.repos.d
 /var/log/dnf*
 
-# ── Fedora's own Flatpak remote ──────────────────────────────────────────────
-# Fedora's flatpak package adds the Fedora (OCI) remote at boot; larch's only
-# remote is Flathub (rootfs-overlay/etc/flatpak/remotes.d).
-/usr/lib/systemd/system/flatpak-add-fedora-repos.service
-/etc/systemd/system/*.target.wants/flatpak-add-fedora-repos.service
-
 # ── systemd-boot (systemd-udev's part of it) ─────────────────────────────────
 /usr/bin/bootctl
 /usr/lib/systemd/system/systemd-boot-update.service
@@ -37,31 +31,6 @@
 /usr/lib/modules/*/build
 /usr/lib/modules/*/source
 /usr/src/*
-
-# ── NVIDIA: compute, ray-tracing and video-codec userspace ───────────────────
-# The Debian image never had it (only the GL/EGL/Vulkan driver), and Flatpak
-# apps bring their own NVIDIA userspace (org.freedesktop.Platform.GL.nvidia):
-# on the host only gnome-shell/mutter use the driver, through GL/EGL/GBM/Vulkan.
-/usr/lib64/libcuda.so*
-# libnvidia-present links libcuda; nothing links it, and no GL/EGL/Vulkan
-# vendor file names it.
-/usr/lib64/libnvidia-present.so*
-/usr/lib64/libcudadebugger.so*
-/usr/lib64/libnvidia-nvvm.so*
-/usr/lib64/libnvidia-nvvm70.so*
-/usr/lib64/libnvidia-ptxjitcompiler.so*
-/usr/lib64/libnvidia-rtcore.so*
-/usr/lib64/libnvoptix.so*
-/usr/share/nvidia/nvoptix.bin
-/usr/lib64/libnvcuvid.so*
-/usr/lib64/libnvidia-encode.so*
-/usr/lib64/libnvidia-opticalflow.so*
-/usr/lib64/libnvidia-opencl.so*
-/etc/OpenCL/vendors/nvidia.icd
-/usr/lib64/libnvidia-ngx.so*
-/usr/bin/nvidia-ngx-updater
-/usr/lib64/nvidia/wine
-/usr/lib64/libnvidia-pkcs11*.so*
 
 # ── NVIDIA: X.Org driver bits (there is no X server) ─────────────────────────
 /usr/lib64/xorg/modules/drivers/nvidia_drv.so

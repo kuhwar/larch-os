@@ -10,8 +10,7 @@ EFI_PART_SIZE="1GiB"
 # update downloads them.
 SYS_PART_SIZE="4GiB"
 # LARCHCONF holds the upper layers of /etc and /var, i.e. all runtime state
-# (journal capped at 64M, Flatpak system installs excluded — those go to
-# --user in /home).
+# (journal capped at 64M; apps live in /home).
 CONF_PART_SIZE="1GiB"
 TARGET_DISK=""
 AUTO_YES=0

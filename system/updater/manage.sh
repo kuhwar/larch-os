@@ -234,8 +234,8 @@ reset_system() {
   Reset the system settings to how they were right after installation.
 
   \Z1Removed:\Zn Wi-Fi networks and other connections, Bluetooth devices,
-  printers, time zone, language and avatar settings, system-wide Flatpak
-  apps, logs, and every other change to the system's configuration.
+  printers, time zone, language and avatar settings, logs, and every
+  other change to the system's configuration.
 
   Kept: the user accounts and their passwords, the computer's name,
   and everything in /home (your files, your settings, your apps)." 17 76 \

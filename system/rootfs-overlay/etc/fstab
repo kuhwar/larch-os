@@ -14,7 +14,7 @@
 #   /var = the same, over LARCHCONF/var: every service's state
 #          (NetworkManager, Bluetooth, AccountsService, journal, timers, …)
 #          persists, while image-owned files nobody has changed (catalogs,
-#          caches, the Flathub remote) come from whatever image is booted.
+#          caches, …) come from whatever image is booted.
 #
 # Those three lines are listed here only so systemd knows them and orders
 # their unmounting at shutdown (overlays before /conf); they are already

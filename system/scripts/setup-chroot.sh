@@ -74,11 +74,6 @@ if [ -d /usr/share/plymouth/themes ]; then
     done
 fi
 
-# ── Flatpak: add Flathub system-wide ─────────────────────────────────────────
-log "Configuring Flatpak"
-flatpak remote-add --system --if-not-exists flathub \
-    https://dl.flathub.org/repo/flathub.flatpakrepo
-
 # ── NetworkManager ───────────────────────────────────────────────────────────
 mkdir -p /etc/NetworkManager/conf.d
 cat > /etc/NetworkManager/conf.d/00-larch.conf <<'EOF'

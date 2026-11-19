@@ -3,8 +3,7 @@
 // password prompt. GNOME Settings' Printers panel drives cups-pk-helper's
 // org.opensuse.cupspkhelper.mechanism actions, whose default implicit
 // authorization is auth_admin — but larch-os has no admin identity (root is
-// locked, there is no sudo group; see 99-larch-flatpak.rules for the same
-// rationale applied to Flatpak).
+// locked, there is no sudo group).
 polkit.addRule(function(action, subject) {
     if (action.id.indexOf("org.opensuse.cupspkhelper.mechanism") == 0 &&
         subject.local && subject.active) {

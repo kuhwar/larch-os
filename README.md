@@ -3,8 +3,8 @@
 A minimal, **immutable** Linux desktop. The whole operating system ships as a single
 read-only image: you can't break it, and every reboot returns the system files to a
 known-good state. You get a clean GNOME (Wayland) desktop, and you install apps as
-AppImages with [Sawmill](https://github.com/projectlarch/sawmill), the built-in app manager
-(or as [Flatpaks](https://flatpak.org/) from [Flathub](https://flathub.org/)). Your files and
+AppImages with [Sawmill](https://github.com/projectlarch/sawmill), the built-in app store.
+Your files and
 settings live in `/home` and are kept separate from the OS.
 
 It is built from Fedora packages and is intentionally simple: automatic (DHCP)
@@ -38,7 +38,6 @@ networking, no package manager to fiddle with, no options to get lost in.
 - Your choice of desktop — GNOME Shell on Wayland (with Files and Sawmill) today, more to
   come — switchable later from the updater.
 - Sawmill, the app manager: install and update AppImages from GitHub, GitLab and Codeberg.
-- Flathub preconfigured for the `flatpak` command.
 - A persistent home directory on its own partition.
 - A locked-down, zero-decision setup: user accounts managed only from the boot menu, DHCP networking, no root login,
   no SSH, no package manager.
@@ -127,16 +126,6 @@ GitHub, GitLab, Codeberg and other Gitea servers; the apps it installs land in
 part of the OS image (`/opt/sawmill/Sawmill.AppImage`) and is updated with each system
 release.
 
-There is no terminal in the core image. If you want one (e.g. to use the `flatpak`
-command with the preconfigured [Flathub](https://flathub.org/) remote), install a
-terminal app first. larch-os defaults Flatpak to your **persistent per-user space**
-(`flatpak` is aliased to `flatpak --user`, so installs land in `~/.local/share/flatpak`;
-a system-wide install via `flatpak --system` would be wiped on the next reboot):
-
-```bash
-flatpak install flathub org.mozilla.firefox
-```
-
 AppImages you download yourself work too — keep them anywhere in your home (e.g.
 `~/Applications`), make them executable (Files → Properties → Executable as Program), and
 run them.
@@ -146,10 +135,10 @@ run them.
 - **The OS is read-only.** System files come from a compressed image and cannot be
   changed. System settings (Wi-Fi, Bluetooth, printers, your password, logs) are kept
   on a separate config partition, layered over the image's defaults.
-- **`/home` is persistent.** Your files, settings, and apps (AppImages, Flatpaks) live on a separate
+- **`/home` is persistent.** Your files, settings, and apps (AppImages) live on a separate
   partition and survive reboots.
 - **There is no package manager** in the running system, and no root login. You shape
-  your environment entirely through apps (Sawmill, Flatpak) and your home directory.
+  your environment entirely through apps (Sawmill) and your home directory.
 
 This is by design: it makes the system predictable and very hard to break.
 
@@ -181,7 +170,7 @@ The boot menu's **Manage LARCH** entry opens a menu with:
   one.
 - **Reset LARCH OS** — returns the system settings to how they were right after
   installation: Wi-Fi networks, Bluetooth devices, printers, time zone and language
-  settings, system-wide Flatpak apps and logs are removed. The user accounts and their
+  settings and logs are removed. The user accounts and their
   passwords, the computer's name and everything in `/home` are kept.
 - **Boot into EFI setup** — restarts into the computer's firmware setup.
 
@@ -190,14 +179,13 @@ The boot menu's **Manage LARCH** entry opens a menu with:
 - **Users are managed from the boot menu only.** GNOME Settings can't add or remove users;
   use **Manage LARCH → Manage users**.
 - **Networking is automatic (DHCP) only.** There's no network configuration UI.
-- **Apps via Sawmill (AppImages) or Flatpak only.** No `apt`, no system package manager.
+- **Apps via Sawmill (AppImages) only.** No `dnf`, no system package manager, no Flatpak.
 - **Updates need a network** — there is no offline update.
 
 ## Roadmap
 
 - **Rollback** — keep the previous system image and boot it if an update misbehaves.
 - Signed boot images for Secure Boot support.
-- A graphical app store experience on top of Flathub.
 
 ## Build it yourself
 
