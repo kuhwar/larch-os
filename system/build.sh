@@ -167,11 +167,11 @@ copy_resolv() {
 
 # ── Sawmill (the app manager) ────────────────────────────────────────────────
 # install_sawmill <root>: the latest Sawmill release's x86_64 AppImage
-# (github.com/kuhwar/sawmill) at /opt/sawmill/Sawmill.AppImage, its icon in
+# (github.com/projectlarch/sawmill) at /opt/sawmill/Sawmill.AppImage, its icon in
 # hicolor; the launcher is rootfs-overlay/usr/share/applications/
 # io.sawmill.Store.desktop. Verified against the asset digest GitHub's API
 # publishes; cached in work/sawmill/<tag>/ so a re-run only checks the tag.
-SAWMILL_REPO=kuhwar/sawmill
+SAWMILL_REPO=projectlarch/sawmill
 SAWMILL_ASSET=Sawmill-x86_64.AppImage
 install_sawmill() {
     local root=$1 json tag sum dir auth=()

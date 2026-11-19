@@ -23,7 +23,7 @@
 # entry opt/larch/source (test-qemu.sh --local). Its images are offered as
 # larch-<desktop>-local.
 
-REPO="kuhwar/larch-os"
+REPO="projectlarch/os"
 RELEASES_SHOWN=5
 CA_BUNDLE="/etc/ssl/certs/ca-certificates.crt"
 DEFAULT_DESKTOP=gnome

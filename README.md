@@ -3,7 +3,7 @@
 A minimal, **immutable** Linux desktop. The whole operating system ships as a single
 read-only image: you can't break it, and every reboot returns the system files to a
 known-good state. You get a clean GNOME (Wayland) desktop, and you install apps as
-AppImages with [Sawmill](https://github.com/kuhwar/sawmill), the built-in app manager
+AppImages with [Sawmill](https://github.com/projectlarch/sawmill), the built-in app manager
 (or as [Flatpaks](https://flatpak.org/) from [Flathub](https://flathub.org/)). Your files and
 settings live in `/home` and are kept separate from the OS.
 
@@ -60,7 +60,7 @@ enabled you'll need to **disable it in firmware settings** before installing and
 ## 1. Download
 
 Grab the installer ISO from the newest `installer-v*` release on the
-[**Releases**](https://github.com/kuhwar/larch-os/releases) page:
+[**Releases**](https://github.com/projectlarch/os/releases) page:
 
 - `larch-installer.iso` and its checksum `larch-installer.iso.sha256`
 
@@ -120,7 +120,7 @@ larger is plenty.
 ## 4. First boot & installing apps
 
 Log in with the username and password you chose. To install software, open
-**[Sawmill](https://github.com/kuhwar/sawmill)** — the app manager, in the dash and the
+**[Sawmill](https://github.com/projectlarch/sawmill)** — the app manager, in the dash and the
 app grid. It finds, installs and updates [AppImages](https://appimage.org/) published on
 GitHub, GitLab, Codeberg and other Gitea servers; the apps it installs land in
 `~/.local/share/sawmill/` on your `/home` and appear in the app grid. Sawmill itself is
