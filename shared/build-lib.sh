@@ -43,7 +43,9 @@ MODS_NET='^kernel/(drivers/(net|thunderbolt|bcma|ssb)/|net/(wireless|mac80211|rf
 # <root>. cp -a carries the checkout's modes, which a umask of 002 leaves
 # group-writable — on /, /etc, /usr too. Nothing here wants g/o write.
 copy_overlay() {
-    cp -a "$1/." "$2/"
+    # Root's, whoever owns the source (--dev bind-mounts the user's checkout:
+    # cp -a would make / and every overlay file theirs).
+    cp -a --no-preserve=ownership "$1/." "$2/"
     (cd "$1" && find . ! -type l -print0) | (cd "$2" && xargs -0 chmod go-w)
 }
 
