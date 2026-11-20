@@ -102,6 +102,9 @@ fi
 # Not exec'd: with --local the file server is stopped when QEMU exits.
 # A USB keyboard: OVMF doesn't see QEMU's PS/2 keyboard here, so without it
 # holding Space can't open systemd-boot's hidden menu (Manage LARCH).
+# virtio-vga-gl + gl=on: virgl, the guest's GL runs on the host GPU. Without it
+# the guest only has software rendering (llvmpipe) — laggy WebKit apps like
+# Sawmill, and apps that need GL 4.3 (Ghostty) fail to create a context.
 "${qemu_system[@]}" \
     -enable-kvm \
     -m 4G \
@@ -112,9 +115,9 @@ fi
     -device virtio-blk-pci,drive=disk,bootindex=0 \
     -drive file="$ISO",media=cdrom,readonly=on,if=none,id=cd \
     -device ide-cd,drive=cd,bootindex=1 \
-    -vga virtio \
+    -vga none -device virtio-vga-gl \
     -device qemu-xhci -device usb-kbd \
-    -display gtk,gl=off \
+    -display gtk,gl=on \
     -full-screen \
     -device virtio-net,netdev=net0 \
     -netdev user,id=net0 \
