@@ -1,12 +1,74 @@
 # shared/lib/conf.sh — LARCHCONF's /etc and /var layers
-# Sourced by the installer and the updater; not executable on its own.
+# Sourced by sys.initramfs, the installer and the updater; not executable on
+# its own.
 #
-# LARCHCONF (mounted at /conf on the running system) holds the upper layers of
-# the /etc and /var overlays that sys.initramfs mounts: etc/ + etc-work/,
-# var/ + var-work/. The installer creates them (seed_layers). Updates leave
-# them alone, desktop switches included. "Reset LARCH OS" (Manage LARCH)
-# replaces them with layers holding nothing but the machine's identity and
-# accounts (rebuild_layers + swap_layers).
+# LARCHCONF (mounted at /conf on the running system) holds:
+#   etc/ + etc-work/  the upper layer of the /etc overlay
+#   var/              /var's writable directories (VAR_DIRS): var/lib, var/log,
+#                     var/cache and var/spool, bind-mounted over the image's
+#                     (mount_var). The rest of /var is the read-only image.
+# The installer creates them (seed_layers). Updates leave them alone, desktop
+# switches included. "Reset LARCH OS" (Manage LARCH) replaces them with
+# layers holding nothing but the machine's identity and accounts
+# (rebuild_layers + swap_layers).
+
+# Same options as the /etc overlay everywhere (sys/init, manage.sh, fstab):
+# the lower layer is replaced by every update, so nothing in the upper layer
+# may point into a particular squashfs — index (records the lower root's file
+# handle and refuses to mount once it changes: "Stale file handle"), metacopy
+# (metadata-only copy-ups whose data stays in the old lower layer) and
+# redirect_dir (renamed directories referring to lower paths) are all off,
+# whatever the kernel's defaults.
+OVL_OPTS="index=off,metacopy=off,redirect_dir=off"
+
+# /var's writable directories, each LARCHCONF:/var/<dir> bind-mounted on
+# /var/<dir>. Everything else in /var is the image's: symlinks into /run
+# (lock, run), mail → spool/mail, empty dirs nothing writes to (adm, db, opt,
+# …), and /var/tmp, a tmpfs (fstab).
+VAR_DIRS="lib log cache spool"
+
+# var_skeleton <image-dir> <conf-dir>: every directory and symlink of the
+# image's <image-dir> that <conf-dir> lacks, created there with the image's
+# numeric owner and mode (no files). So services whose state directories only
+# their package creates (colord, geoclue, samba, CUPS's spool, …) find them on
+# an empty layer, and a newer image's new ones appear after an update.
+# Existing entries are never changed.
+var_skeleton() {
+    [ -d "$1" ] || return 0
+    (cd "$1" && find . \( -type d -o -type l \)) | while IFS= read -r _p; do
+        _p=${_p#.}; _p=${_p#/}
+        _t="$2${_p:+/$_p}"
+        [ -e "$_t" ] || [ -L "$_t" ] && continue
+        if [ -L "$1/$_p" ]; then
+            ln -s "$(readlink "$1/$_p")" "$_t" 2>/dev/null || true
+        else
+            mkdir "$_t" 2>/dev/null || continue
+            chown "$(stat -c %u:%g "$1/${_p:-.}")" "$_t" 2>/dev/null || true
+            chmod "$(stat -c %a "$1/${_p:-.}")" "$_t" 2>/dev/null || true
+        fi
+    done
+    unset _p _t
+}
+
+# mount_var <root> <conf-mount>: LARCHCONF:/var/<dir> (completed by
+# var_skeleton) bind-mounted on <root>/var/<dir>, for each of VAR_DIRS.
+mount_var() {
+    mkdir -p "$2/var" || return 1
+    for _d in $VAR_DIRS; do
+        var_skeleton "$1/var/$_d" "$2/var/$_d"
+        [ -d "$2/var/$_d" ] || mkdir -m 0755 "$2/var/$_d" || return 1
+        mount --bind "$2/var/$_d" "$1/var/$_d" || return 1
+    done
+    unset _d
+}
+
+# umount_var <root>: undo mount_var.
+umount_var() {
+    for _d in $VAR_DIRS; do
+        umount "$1/var/$_d" 2>/dev/null || umount -l "$1/var/$_d" 2>/dev/null || true
+    done
+    unset _d
+}
 
 # Write this machine's identity files into <out-dir> (an /etc upper layer):
 # hostname, hosts, machine-id, and the account databases with the user in place
@@ -58,18 +120,18 @@ apply_machine_config() {
 }
 
 # seed_layers <image-root> <config-dir> <username> <etc-out> <var-out>
-# Fresh upper layers for <image-root>: the identity files in <etc-out>, an
-# empty <var-out> (its root's mode/owner become /var's), and the image's "up to
-# date" stamps, so ConditionNeedsUpdate= services (systemd-sysusers, ldconfig,
-# …) don't run on the first boot but do run once after each update — whose
-# image has a newer /usr — and bring the layers up to date.
+# Fresh layers for <image-root>: the identity files in <etc-out>, an empty
+# <var-out> (mount_var fills in the directory skeleton at boot), and the
+# image's /etc "up to date" stamp, so ConditionNeedsUpdate= services
+# (systemd-sysusers, ldconfig, …) don't run on the first boot but do run once
+# after each update — whose image has a newer /usr — and bring the layer up to
+# date. /var/.updated is the image's own, on the read-only /var.
 seed_layers() {
     apply_machine_config "$1" "$2" "$3" "$4"
     mkdir -p "$5"
     chown 0:0 "$5"
     chmod 0755 "$5"
     cp -p "$1/etc/.updated" "$4/.updated" 2>/dev/null || true
-    cp -p "$1/var/.updated" "$5/.updated" 2>/dev/null || true
 }
 
 # The files that make up the machine's identity and accounts, relative to /etc.
@@ -78,7 +140,7 @@ IDENTITY_FILES="hostname hosts machine-id passwd shadow group gshadow subuid sub
 # rebuild_layers <conf-mount>: fresh layers built beside the current ones as
 # etc.new/ and var.new/ (swap_layers puts them in place): etc.new/ gets the
 # current layer's IDENTITY_FILES verbatim (cp -p: owner, mode), var.new/ is
-# empty. So every account — with its password, groups and ID range — and the
+# empty (mount_var recreates the directory skeleton at boot). So every account — with its password, groups and ID range — and the
 # hostname and machine-id stay exactly as they are; everything else goes. No
 # .updated stamps: the ConditionNeedsUpdate= services (systemd-sysusers,
 # ldconfig, …) run once on the next boot and bring the new layers up to date.
@@ -98,7 +160,7 @@ rebuild_layers() {
 }
 
 # swap_layers <conf-mount>: put etc.new/ and var.new/ in place (renames), with
-# fresh workdirs. If this is cut off, sys.initramfs finishes it at boot.
+# a fresh /etc workdir. If this is cut off, sys.initramfs finishes it at boot.
 swap_layers() {
     for _d in etc var; do
         [ -d "$1/$_d.new" ] || return 1
@@ -106,9 +168,9 @@ swap_layers() {
     for _d in etc var; do
         rm -rf "${1:?}/$_d.old"
         mv "$1/$_d" "$1/$_d.old" && mv "$1/$_d.new" "$1/$_d" || return 1
-        rm -rf "${1:?}/$_d-work"
-        mkdir -m 0700 "$1/$_d-work"
     done
+    rm -rf "${1:?}/etc-work"
+    mkdir -m 0700 "$1/etc-work"
     sync
     rm -rf "${1:?}/etc.old" "${1:?}/var.old"
     sync

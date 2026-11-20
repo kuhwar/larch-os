@@ -22,7 +22,8 @@
 #        3. LARCHCONF (ext4)  — /conf: etc/ + etc-work/, the upper layer of the
 #                               /etc overlay, starting with this machine's
 #                               hostname, hosts, machine-id and account files;
-#                               var/ + var-work/, the upper layer of /var
+#                               var/, /var's writable lib, log, cache and
+#                               spool (bind-mounted by sys.initramfs)
 #        4. LARCHHOME (ext4)  — /home/<username>, seeded from the image's /etc/skel
 #
 #   5. Download the release onto LARCHSYS, verify it, install it, write the
@@ -214,10 +215,11 @@ tr -d '-' < /proc/sys/kernel/random/uuid > "$CONFIG_TMP/machine-id"
 mount_or_die ext4 "$PART3" "$MOUNT_CONF"
 
 show_step "Writing machine config into the config partition"
-# The upper layers of /etc (this machine's identity) and /var (empty).
+# /etc's upper layer (this machine's identity) and /var's directories (empty;
+# sys.initramfs creates the image's directory skeleton in them at boot).
 seed_layers "$MOUNT_IMG" "$CONFIG_TMP" "$LARCH_USERNAME" "$MOUNT_CONF/etc" "$MOUNT_CONF/var"
-# overlayfs's workdirs: empty, on the same filesystem as the upper layers.
-mkdir -m 0700 "$MOUNT_CONF/etc-work" "$MOUNT_CONF/var-work"
+# overlayfs's workdir: empty, on the same filesystem as the upper layer.
+mkdir -m 0700 "$MOUNT_CONF/etc-work"
 rm -rf "$CONFIG_TMP"
 
 sync

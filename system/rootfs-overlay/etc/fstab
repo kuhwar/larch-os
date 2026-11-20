@@ -4,20 +4,20 @@
 #
 # The root is sys.squashfs on LARCHSYS, loop-mounted read-only by sys.initramfs
 # (system/initramfs/sys/init), which also mounts — before systemd starts —
-# LARCHCONF at /conf and the overlays on /etc and /var:
+# LARCHCONF at /conf, the overlay on /etc and the binds on /var:
 #
 #   /etc = the image's /etc (read-only, lower) under LARCHCONF/etc (upper), so
 #          tools that replace files by rename (passwd, usermod, timedated, …)
 #          work and their changes persist. The installer writes this machine's
 #          identity into the upper layer: hostname, hosts, machine-id and the
 #          account files. PID 1 starts with it already in place.
-#   /var = the same, over LARCHCONF/var: every service's state
-#          (NetworkManager, Bluetooth, AccountsService, journal, timers, …)
-#          persists, while image-owned files nobody has changed (catalogs,
-#          caches, …) come from whatever image is booted.
+#   /var = the image's, read-only, with LARCHCONF/var/{lib,log,cache,spool}
+#          bind-mounted on /var/{lib,log,cache,spool}: every service's state
+#          (NetworkManager, Bluetooth, AccountsService, journal, timers, CUPS
+#          jobs, …) persists there, and nothing else in /var is writable.
 #
-# Those three lines are listed here only so systemd knows them and orders
-# their unmounting at shutdown (overlays before /conf); they are already
+# Those lines are listed here only so systemd knows them and orders their
+# unmounting at shutdown (overlay and binds before /conf); they are already
 # mounted, and /conf has fsck pass 0 because sys.initramfs checks it.
 #
 # /var/tmp is tmpfs so unbounded temp files can't fill LARCHCONF. LARCHHOME
@@ -28,7 +28,10 @@
 
 LABEL=LARCHCONF          /conf       ext4      defaults,relatime                              0  0
 overlay                  /etc        overlay   lowerdir=/etc,upperdir=/conf/etc,workdir=/conf/etc-work,index=off,metacopy=off,redirect_dir=off,x-systemd.requires-mounts-for=/conf  0  0
-overlay                  /var        overlay   lowerdir=/var,upperdir=/conf/var,workdir=/conf/var-work,index=off,metacopy=off,redirect_dir=off,x-systemd.requires-mounts-for=/conf  0  0
+/conf/var/lib            /var/lib    none      bind,x-systemd.requires-mounts-for=/conf       0  0
+/conf/var/log            /var/log    none      bind,x-systemd.requires-mounts-for=/conf       0  0
+/conf/var/cache          /var/cache  none      bind,x-systemd.requires-mounts-for=/conf       0  0
+/conf/var/spool          /var/spool  none      bind,x-systemd.requires-mounts-for=/conf       0  0
 tmpfs                    /var/tmp    tmpfs     mode=1777,nosuid,nodev,size=25%                0  0
 LABEL=LARCHHOME          /home       ext4      defaults,relatime,nofail                       0  2
 tmpfs                    /media      tmpfs     mode=0755,nosuid,nodev                         0  0

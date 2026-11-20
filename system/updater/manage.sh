@@ -6,15 +6,14 @@
 #
 # Accounts are changed with the installed image's own tools (useradd, userdel,
 # chpasswd, unix_chkpwd), chrooted into the image as the running system sees
-# it: sys.squashfs loop-mounted, /etc and /var overlaid with LARCHCONF's upper
-# layers exactly as sys.initramfs does, LARCHHOME at /home. So the hashes,
+# it: sys.squashfs loop-mounted, /etc overlaid with LARCHCONF's upper layer
+# and /var's directories bind-mounted from it (conf.sh mount_var) exactly as
+# sys.initramfs does, LARCHHOME at /home. So the hashes,
 # groups, subordinate ID ranges and /etc/skel are the system's own, and a
 # password changed in GNOME (yescrypt) is checked like the lock screen does.
 
 IMG_MNT="$RUN/img"
 mkdir -p "$IMG_MNT"
-# Same options as system/initramfs/sys/init (see there).
-OVL_OPTS="index=off,metacopy=off,redirect_dir=off"
 IMG_OPEN=0
 
 conf_mount() {
@@ -41,13 +40,13 @@ img_open() {
         conf_umount; return 1
     fi
     IMG_OPEN=1
-    for _d in etc var; do
-        mkdir -p "$CONF_MNT/$_d" "$CONF_MNT/$_d-work"
-        mount -t overlay overlay \
-            -o "lowerdir=$IMG_MNT/$_d,upperdir=$CONF_MNT/$_d,workdir=$CONF_MNT/$_d-work,$OVL_OPTS" \
-            "$IMG_MNT/$_d" \
-            || { note "Users" "  Could not mount the /$_d overlay."; img_close; return 1; }
-    done
+    mkdir -p "$CONF_MNT/etc" "$CONF_MNT/etc-work"
+    mount -t overlay overlay \
+        -o "lowerdir=$IMG_MNT/etc,upperdir=$CONF_MNT/etc,workdir=$CONF_MNT/etc-work,$OVL_OPTS" \
+        "$IMG_MNT/etc" \
+        || { note "Users" "  Could not mount the /etc overlay."; img_close; return 1; }
+    mount_var "$IMG_MNT" "$CONF_MNT" \
+        || { note "Users" "  Could not mount /var's directories."; img_close; return 1; }
     mount -o bind /dev "$IMG_MNT/dev" \
         && mount -t proc proc "$IMG_MNT/proc" \
         && mount -t sysfs sysfs "$IMG_MNT/sys" \
@@ -62,9 +61,11 @@ img_open() {
 
 img_close() {
     sync
-    for _m in home tmp run sys proc dev var etc; do
+    for _m in home tmp run sys proc dev; do
         umount "$IMG_MNT/$_m" 2>/dev/null || umount -l "$IMG_MNT/$_m" 2>/dev/null || true
     done
+    umount_var "$IMG_MNT"
+    umount "$IMG_MNT/etc" 2>/dev/null || umount -l "$IMG_MNT/etc" 2>/dev/null || true
     umount "$IMG_MNT" 2>/dev/null || umount -l "$IMG_MNT" 2>/dev/null || true
     IMG_OPEN=0
     conf_umount
