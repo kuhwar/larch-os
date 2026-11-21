@@ -8,16 +8,17 @@
 #   2. Find LARCHSYS by GPT name; LARCHCONF is the one on the same disk.
 #   3. Mount LARCHSYS (ext4) read-only and loop-mount its sys.squashfs as the
 #      root, read-only — identical on every install.
-#   4. fsck and mount LARCHCONF at /conf, whose files the read-only image's
-#      /etc links to (hostname, machine-id, …), completed with the image's
-#      defaults, and bind its etc/ directories on /etc's (shared/lib/conf.sh
-#      mount_etc), so PID 1 starts with this machine's /etc; and
+#   4. fsck and mount LARCHCONF at /conf, overlay /etc with its accounts
+#      layer (conf/etc-overlay), complete conf/etc — the files the image's
+#      /etc links to (hostname, machine-id, …) — with the image's defaults and
+#      bind its directories on /etc's (shared/lib/conf.sh mount_etc), so PID 1
+#      starts with this machine's /etc; and
 #      bind-mount conf/var/{lib,log,cache,spool} on /var's (shared/lib/conf.sh
 #      mount_var) — the rest of /var stays the read-only image.
 #   5. Move /dev, /proc, /sys and /run (with LARCHSYS mounted below it, at
 #      /run/larch/sys) into the new root and switch_root to systemd.
 #
-# /etc/fstab lists /conf and the /etc and /var binds too (already mounted here), so systemd
+# /etc/fstab lists /conf, the /etc overlay and the /etc and /var binds too (already mounted here), so systemd
 # orders their unmounting at shutdown; /home and the tmpfs mounts are its own.
 set -e
 
@@ -70,20 +71,10 @@ fsck_ext4 "$CONF_PART" || log "fsck of /dev/$CONF_PART reported errors"
 mount -t ext4 -o rw,relatime "/dev/$CONF_PART" "$NEWROOT/conf" \
     || die "Could not mount the config partition /dev/$CONF_PART."
 # A Reset LARCH OS the updater couldn't finish (shared/lib/conf.sh
-# swap_layers renames etc.new → etc, then var.new → var): complete it. While
-# etc.new is still there next to etc, the swap hadn't started — leave it.
+# swap_layers): complete it.
 _c="$NEWROOT/conf"
-if [ ! -d "$_c/etc" ] && [ -d "$_c/etc.new" ]; then
-    log "finishing an interrupted reset (/etc)"
-    mv "$_c/etc.new" "$_c/etc"
-fi
-if [ ! -d "$_c/etc.new" ] && [ -d "$_c/var.new" ]; then
-    log "finishing an interrupted reset (/var)"
-    [ ! -d "$_c/var" ] || mv "$_c/var" "$_c/var.old"
-    mv "$_c/var.new" "$_c/var"
-fi
-rm -rf "$_c/etc.old" "$_c/var.old"
-mount_etc "$NEWROOT" "$_c" || die "Could not set up /etc's files from /dev/$CONF_PART."
+finish_swap "$_c" || die "Could not finish an interrupted reset on /dev/$CONF_PART."
+mount_etc "$NEWROOT" "$_c" || die "Could not mount /etc from /dev/$CONF_PART."
 mount_var "$NEWROOT" "$_c" || die "Could not mount /var's directories from /dev/$CONF_PART."
 
 # ── Hand over to systemd ─────────────────────────────────────────────────────
