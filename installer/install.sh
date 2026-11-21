@@ -19,11 +19,14 @@
 #                               larch-os/sys.initramfs, larch-os/updater.initramfs
 #        2. LARCHSYS  (ext4)  — sys.squashfs (the chosen desktop's OS root,
 #                               loop-mounted by sys.initramfs), version, desktop
-#        3. LARCHCONF (ext4)  — /conf: etc/ + etc-work/, the upper layer of the
-#                               /etc overlay, starting with this machine's
-#                               hostname, hosts, machine-id and account files;
-#                               var/, /var's writable lib, log, cache and
-#                               spool (bind-mounted by sys.initramfs)
+#        3. LARCHCONF (ext4)  — /conf: etc-overlay/ + etc-overlay-work/, the
+#                               upper layer of the /etc overlay, holding only
+#                               the account files; etc/, the files the
+#                               image's /etc links to (starting with this
+#                               machine's hostname, hosts, machine-id) and the
+#                               /etc directories bound from it; var/, /var's
+#                               writable lib, log, cache and spool
+#                               (bind-mounted by sys.initramfs)
 #        4. LARCHHOME (ext4)  — /home/<username>, seeded from the image's /etc/skel
 #
 #   5. Download the release onto LARCHSYS, verify it, install it, write the
@@ -205,21 +208,20 @@ printf '%s:%s:%d:0:99999:7:::\n' "$LARCH_USERNAME" "$pw_hash" "$today_days" \
 chmod 600 "$CONFIG_TMP/shadow"
 
 # machine-id — generated once at install so the machine keeps a stable identity
-# (DHCP lease/IP, DHCPv6 DUID, systemd journal). sys.initramfs mounts the /etc
-# overlay before systemd starts, so PID 1 reads it from the upper layer.
+# (DHCP lease/IP, DHCPv6 DUID, systemd journal). The image's /etc/machine-id
+# links to LARCHCONF:/etc/machine-id, mounted before systemd starts.
 # Format: 32 lowercase hex digits (sourced from the kernel UUID pool).
 tr -d '-' < /proc/sys/kernel/random/uuid > "$CONFIG_TMP/machine-id"
 
-# ── LARCHCONF: /etc's and /var's upper layers ────────────────────────────────
+# ── LARCHCONF: accounts, /etc's files, /var's directories ────────────────────
 
 mount_or_die ext4 "$PART3" "$MOUNT_CONF"
 
 show_step "Writing machine config into the config partition"
-# /etc's upper layer (this machine's identity) and /var's directories (empty;
-# sys.initramfs creates the image's directory skeleton in them at boot).
-seed_layers "$MOUNT_IMG" "$CONFIG_TMP" "$LARCH_USERNAME" "$MOUNT_CONF/etc" "$MOUNT_CONF/var"
-# overlayfs's workdir: empty, on the same filesystem as the upper layer.
-mkdir -m 0700 "$MOUNT_CONF/etc-work"
+# The accounts (etc-overlay/), this machine's identity (etc/) and /var's
+# directories (empty; sys.initramfs adds the image's defaults and directory
+# skeleton at boot).
+seed_layers "$MOUNT_IMG" "$CONFIG_TMP" "$LARCH_USERNAME" "$MOUNT_CONF"
 rm -rf "$CONFIG_TMP"
 
 sync

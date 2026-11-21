@@ -9,7 +9,8 @@ EFI_PART_SIZE="1GiB"
 # LARCHSYS (ext4) holds sys.squashfs — and the next release's files while an
 # update downloads them.
 SYS_PART_SIZE="4GiB"
-# LARCHCONF holds the upper layers of /etc and /var, i.e. all runtime state
+# LARCHCONF holds /etc's account overlay, /etc's per-machine files and
+# directories and /var's writable directories, i.e. all runtime state
 # (journal capped at 64M; apps live in /home).
 CONF_PART_SIZE="1GiB"
 TARGET_DISK=""

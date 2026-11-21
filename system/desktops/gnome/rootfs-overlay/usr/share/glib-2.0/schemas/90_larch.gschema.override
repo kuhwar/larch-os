@@ -32,3 +32,11 @@ logo=''
 # the image doesn't ship).
 [org.gnome.shell]
 favorite-apps=['org.gnome.Nautilus.desktop', 'io.sawmill.Store.desktop']
+
+# Folders before files: Files ("Sort Folders Before Files") and GTK 4's file
+# chooser share this key; GTK 3 apps' file chooser has its own.
+[org.gtk.gtk4.Settings.FileChooser]
+sort-directories-first=true
+
+[org.gtk.Settings.FileChooser]
+sort-directories-first=true

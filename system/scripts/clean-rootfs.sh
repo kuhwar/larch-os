@@ -76,6 +76,32 @@ if command -v gtk-update-icon-cache >/dev/null && [ -f /usr/share/icons/hicolor/
     gtk-update-icon-cache -q -f /usr/share/icons/hicolor || true
 fi
 
+# ── /etc complete in the image ───────────────────────────────────────────────
+# /etc's overlay is for the accounts only, so the image carries what would
+# otherwise be created there on the first boot: tmpfiles.d's /etc lines (vconsole.conf
+# from /usr/share/factory, polkit's rules.d 0750 root:polkitd, credstore, …),
+# colord's ConfigurationDirectory, foomatic's one-time upgrade stamp
+# (foomaticrip-upgrade.service: nothing to upgrade on a fresh image), and the
+# mount point of localed's X11 keyboard file (bound from LARCHCONF).
+systemd-tmpfiles --create --boot --prefix=/etc 2>&1 | sed 's/^/  tmpfiles: /' || true
+if getent passwd colord >/dev/null; then
+    install -d -m 0755 -o colord -g colord /etc/colord
+fi
+if [ -d /etc/foomatic/hashes.d ]; then
+    : > /etc/foomatic/hashes.d/hashes.foomatic-opt-update
+fi
+mkdir -p /etc/X11/xorg.conf.d
+# NetworkManager keeps saved connections (Wi-Fi passwords) here instead of
+# /etc (NetworkManager/conf.d/00-larch.conf).
+install -d -m 0700 /var/lib/NetworkManager/system-connections
+
+# ── Build leftovers in /var ──────────────────────────────────────────────────
+# Hidden on the running system by LARCHCONF's /var binds, but dead weight in
+# the image: authselect's backups (one more per build), a random seed every
+# install would share, and rpm/SELinux scriptlet state.
+rm -rf /var/lib/authselect/backups/* /var/lib/systemd/random-seed \
+       /var/lib/rpm-state /var/lib/selinux
+
 # ── Mark /etc and /var as up to date with /usr ───────────────────────────────
 # ConditionNeedsUpdate= (ldconfig, systemd-sysusers, systemd-update-done)
 # compares /usr's mtime against /etc/.updated and /var/.updated. Without them in

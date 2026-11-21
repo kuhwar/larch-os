@@ -40,6 +40,14 @@ log "Selecting the authselect 'local' profile"
 authselect select local --force >/dev/null
 [ -e /etc/pam.d/system-auth ] || { echo "ERROR: no /etc/pam.d/system-auth" >&2; exit 1; }
 
+# ── Nothing but the accounts written to /etc's overlay ───────────────────────
+# /etc's overlay layer on LARCHCONF is meant for the account files only.
+# authselect-apply-changes would regenerate PAM, nsswitch and dconf files into
+# it at boot; ldconfig and systemd-hwdb-update (ConditionNeedsUpdate=/etc,
+# once after each update) would copy ld.so.cache and the 14M udev/hwdb.bin
+# into it — the image already carries all of them, up to date.
+systemctl mask authselect-apply-changes.service ldconfig.service systemd-hwdb-update.service
+
 # ── User setup ───────────────────────────────────────────────────────────────
 log "Creating default user 'larch'"
 # The UID-1000 placeholder the installer turns into the real user.
@@ -82,6 +90,9 @@ plugins=keyfile
 dhcp=internal
 
 [keyfile]
+# Saved connections (Wi-Fi passwords) persist on LARCHCONF's /var/lib, not in
+# /etc's overlay.
+path=/var/lib/NetworkManager/system-connections
 
 [device]
 wifi.scan-rand-mac-address=yes

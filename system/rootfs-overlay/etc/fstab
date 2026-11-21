@@ -4,20 +4,23 @@
 #
 # The root is sys.squashfs on LARCHSYS, loop-mounted read-only by sys.initramfs
 # (system/initramfs/sys/init), which also mounts — before systemd starts —
-# LARCHCONF at /conf, the overlay on /etc and the binds on /var:
+# LARCHCONF at /conf, the overlay and binds on /etc and the binds on /var:
 #
-#   /etc = the image's /etc (read-only, lower) under LARCHCONF/etc (upper), so
-#          tools that replace files by rename (passwd, usermod, timedated, …)
-#          work and their changes persist. The installer writes this machine's
-#          identity into the upper layer: hostname, hosts, machine-id and the
-#          account files. PID 1 starts with it already in place.
+#   /etc = the image's /etc (lower) under LARCHCONF/etc-overlay (upper), which
+#          only the account tools write to: passwd, shadow, group, gshadow,
+#          subuid, subgid (rename-based writers — passwd, usermod, … — need a
+#          writable /etc). The image's per-machine files (hostname, hosts,
+#          machine-id, localtime, …) are symlinks to /conf/etc/<file>, and
+#          LARCHCONF/etc/{cups,bluetooth,X11/xorg.conf.d} are bind-mounted on
+#          /etc's (shared/lib/conf.sh ETC_LINKS, ETC_DIRS). PID 1 starts with
+#          all of it in place.
 #   /var = the image's, read-only, with LARCHCONF/var/{lib,log,cache,spool}
 #          bind-mounted on /var/{lib,log,cache,spool}: every service's state
 #          (NetworkManager, Bluetooth, AccountsService, journal, timers, CUPS
 #          jobs, …) persists there, and nothing else in /var is writable.
 #
 # Those lines are listed here only so systemd knows them and orders their
-# unmounting at shutdown (overlay and binds before /conf); they are already
+# unmounting at shutdown (the binds and the overlay before /conf); they are already
 # mounted, and /conf has fsck pass 0 because sys.initramfs checks it.
 #
 # /var/tmp is tmpfs so unbounded temp files can't fill LARCHCONF. LARCHHOME
@@ -27,7 +30,10 @@
 # the read-only root at boot.
 
 LABEL=LARCHCONF          /conf       ext4      defaults,relatime                              0  0
-overlay                  /etc        overlay   lowerdir=/etc,upperdir=/conf/etc,workdir=/conf/etc-work,index=off,metacopy=off,redirect_dir=off,x-systemd.requires-mounts-for=/conf  0  0
+overlay                  /etc        overlay   lowerdir=/etc,upperdir=/conf/etc-overlay,workdir=/conf/etc-overlay-work,index=off,metacopy=off,redirect_dir=off,x-systemd.requires-mounts-for=/conf  0  0
+/conf/etc/cups           /etc/cups   none      bind,x-systemd.requires-mounts-for=/conf       0  0
+/conf/etc/bluetooth      /etc/bluetooth  none  bind,x-systemd.requires-mounts-for=/conf    0  0
+/conf/etc/X11/xorg.conf.d  /etc/X11/xorg.conf.d  none  bind,x-systemd.requires-mounts-for=/conf  0  0
 /conf/var/lib            /var/lib    none      bind,x-systemd.requires-mounts-for=/conf       0  0
 /conf/var/log            /var/log    none      bind,x-systemd.requires-mounts-for=/conf       0  0
 /conf/var/cache          /var/cache  none      bind,x-systemd.requires-mounts-for=/conf       0  0

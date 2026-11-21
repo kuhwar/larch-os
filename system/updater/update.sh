@@ -33,10 +33,11 @@
 #      then renamed). Until step 4 the installed system is untouched.
 #
 # No partitioning, and the update mounts neither LARCHHOME nor LARCHCONF —
-# not even on a desktop switch: /etc and /var's upper layers (accounts,
-# networks, printers, every setting) carry over as they are. The new image's
-# system users are added on its first boot by systemd-sysusers (its /usr is
-# newer than the layers' .updated stamps). Reset LARCH OS is the clean slate.
+# not even on a desktop switch: /etc's account overlay, LARCHCONF's /etc files
+# and directories and /var's (accounts, networks, printers, every setting)
+# carry over as they are. The new image's system users are added on its first
+# boot by systemd-sysusers (its /usr is newer than the overlay's .updated
+# stamp). Reset LARCH OS is the clean slate.
 
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 

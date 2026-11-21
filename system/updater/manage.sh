@@ -6,8 +6,9 @@
 #
 # Accounts are changed with the installed image's own tools (useradd, userdel,
 # chpasswd, unix_chkpwd), chrooted into the image as the running system sees
-# it: sys.squashfs loop-mounted, /etc overlaid with LARCHCONF's upper layer
-# and /var's directories bind-mounted from it (conf.sh mount_var) exactly as
+# it: sys.squashfs loop-mounted, LARCHCONF on its /conf, /etc overlaid with
+# LARCHCONF's accounts layer and its files and directories in place (conf.sh
+# mount_etc), /var's directories bind-mounted from it (mount_var) exactly as
 # sys.initramfs does, LARCHHOME at /home. So the hashes,
 # groups, subordinate ID ranges and /etc/skel are the system's own, and a
 # password changed in GNOME (yescrypt) is checked like the lock screen does.
@@ -40,11 +41,9 @@ img_open() {
         conf_umount; return 1
     fi
     IMG_OPEN=1
-    mkdir -p "$CONF_MNT/etc" "$CONF_MNT/etc-work"
-    mount -t overlay overlay \
-        -o "lowerdir=$IMG_MNT/etc,upperdir=$CONF_MNT/etc,workdir=$CONF_MNT/etc-work,$OVL_OPTS" \
-        "$IMG_MNT/etc" \
-        || { note "Users" "  Could not mount the /etc overlay."; img_close; return 1; }
+    mount --bind "$CONF_MNT" "$IMG_MNT/conf" \
+        && mount_etc "$IMG_MNT" "$CONF_MNT" \
+        || { note "Users" "  Could not mount /etc."; img_close; return 1; }
     mount_var "$IMG_MNT" "$CONF_MNT" \
         || { note "Users" "  Could not mount /var's directories."; img_close; return 1; }
     mount -o bind /dev "$IMG_MNT/dev" \
@@ -65,7 +64,8 @@ img_close() {
         umount "$IMG_MNT/$_m" 2>/dev/null || umount -l "$IMG_MNT/$_m" 2>/dev/null || true
     done
     umount_var "$IMG_MNT"
-    umount "$IMG_MNT/etc" 2>/dev/null || umount -l "$IMG_MNT/etc" 2>/dev/null || true
+    umount_etc "$IMG_MNT"
+    umount "$IMG_MNT/conf" 2>/dev/null || umount -l "$IMG_MNT/conf" 2>/dev/null || true
     umount "$IMG_MNT" 2>/dev/null || umount -l "$IMG_MNT" 2>/dev/null || true
     IMG_OPEN=0
     conf_umount
@@ -228,7 +228,8 @@ manage_users() {
 
 # Reset LARCH OS: LARCHCONF's layers replaced by ones holding only the account
 # files, computer name and machine-id, copied as they are (conf.sh
-# rebuild_layers). Built as etc.new/var.new and swapped in (cut-off safe).
+# rebuild_layers). Built as etc-overlay.new/etc.new/var.new and swapped in
+# (cut-off safe).
 reset_system() {
     dialog --colors --backtitle "$DIALOG_BT" --title " Reset LARCH OS " \
         --defaultno --yes-label "Reset" --no-label "Back" --yesno "
@@ -245,7 +246,7 @@ reset_system() {
     msg "Reset LARCH OS" "Resetting the system settings..."
     conf_mount || return 0
     if ! rebuild_layers "$CONF_MNT"; then
-        rm -rf "$CONF_MNT/var.new" "$CONF_MNT/etc.new"   # var.new first (see sys/init)
+        rm -rf "$CONF_MNT/var.new" "$CONF_MNT/etc.new" "$CONF_MNT/etc-overlay.new"   # this order (conf.sh LAYERS)
         conf_umount
         note "Reset LARCH OS" "  Could not rebuild the settings (config partition full,\n  or no account files found). Nothing was changed."
         return 0
