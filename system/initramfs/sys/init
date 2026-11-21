@@ -71,28 +71,6 @@ fsck_ext4 "$CONF_PART" || log "fsck of /dev/$CONF_PART reported errors"
 mount -t ext4 -o rw,relatime "/dev/$CONF_PART" "$NEWROOT/conf" \
     || die "Could not mount the config partition /dev/$CONF_PART."
 _c="$NEWROOT/conf"
-# One-time migration (v0.10.0, removed after that release): a LARCHCONF from
-# before the accounts-only overlay keeps the whole /etc upper layer in etc/.
-# Move the account files (and the update stamp, so systemd-sysusers still
-# runs after updates) into etc-overlay/; the rest of the old layer stays in
-# etc/, where only conf.sh's ETC_LINKS and ETC_DIRS are read. The old
-# localtime is a relative link (../usr/share/zoneinfo/…), which would point
-# into /conf/usr from there: made absolute.
-if [ ! -d "$_c/etc-overlay" ] && [ -f "$_c/etc/passwd" ]; then
-    log "migrating LARCHCONF to the accounts-only /etc overlay"
-    mkdir -p "$_c/etc-overlay" || die "Could not migrate LARCHCONF (no space?)."
-    for _f in $ACCOUNT_FILES .updated .pwd.lock passwd- shadow- group- gshadow- subuid- subgid-; do
-        if [ -e "$_c/etc/$_f" ]; then
-            mv "$_c/etc/$_f" "$_c/etc-overlay/$_f" || log "could not move etc/$_f"
-        fi
-    done
-    if [ -L "$_c/etc/localtime" ]; then
-        _t=$(readlink "$_c/etc/localtime")
-        case "$_t" in ../*) ln -sfn "/${_t#../}" "$_c/etc/localtime" || true ;; esac
-    fi
-    rm -rf "$_c/etc-work" || true
-    unset _f _t
-fi
 # A Reset LARCH OS the updater couldn't finish (shared/lib/conf.sh
 # swap_layers): complete it.
 finish_swap "$_c" || die "Could not finish an interrupted reset on /dev/$CONF_PART."
