@@ -76,9 +76,9 @@ if command -v gtk-update-icon-cache >/dev/null && [ -f /usr/share/icons/hicolor/
     gtk-update-icon-cache -q -f /usr/share/icons/hicolor || true
 fi
 
-# ── /etc as the read-only image needs it ─────────────────────────────────────
-# Nothing can change /etc at boot, so the image carries what would otherwise
-# be created there on the first boot: tmpfiles.d's /etc lines (vconsole.conf
+# ── /etc complete in the image ───────────────────────────────────────────────
+# /etc's overlay is for the accounts only, so the image carries what would
+# otherwise be created there on the first boot: tmpfiles.d's /etc lines (vconsole.conf
 # from /usr/share/factory, polkit's rules.d 0750 root:polkitd, credstore, …),
 # colord's ConfigurationDirectory, foomatic's one-time upgrade stamp
 # (foomaticrip-upgrade.service: nothing to upgrade on a fresh image), and the

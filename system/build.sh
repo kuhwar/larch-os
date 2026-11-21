@@ -429,8 +429,9 @@ run_stage 6 "make-squashfs — one sys-<desktop>.squashfs per desktop" && {
     for de in $DESKTOPS; do
         root=$(desktop_root "$de")
         [ -d "$root/usr" ] || die "No rootfs for desktop $de — run stage 5 first"
-        # /etc is read-only: its per-machine files become links to
-        # LARCHCONF (/conf/etc/<file>), the image's own version kept in
+        # /etc's per-machine files become links to LARCHCONF
+        # (/conf/etc/<file>), so they stay out of /etc's overlay (accounts
+        # only); the image's own version is kept in
         # ETC_DEFAULTS for mount_etc (shared/lib/conf.sh). Idempotent. A
         # relative symlink (localtime → ../usr/share/zoneinfo/UTC) is stored
         # with its absolute target, which resolves from /conf/etc too.
