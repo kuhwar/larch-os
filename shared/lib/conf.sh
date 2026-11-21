@@ -12,14 +12,52 @@
 # layers holding nothing but the machine's identity and accounts
 # (rebuild_layers + swap_layers).
 
-# Same options as the /etc overlay everywhere (sys/init, manage.sh, fstab):
-# the lower layer is replaced by every update, so nothing in the upper layer
-# may point into a particular squashfs — index (records the lower root's file
-# handle and refuses to mount once it changes: "Stale file handle"), metacopy
-# (metadata-only copy-ups whose data stays in the old lower layer) and
-# redirect_dir (renamed directories referring to lower paths) are all off,
-# whatever the kernel's defaults.
-OVL_OPTS="index=off,metacopy=off,redirect_dir=off"
+# /etc is the image's, read-only: no overlay. What changes per machine or at
+# runtime lives on LARCHCONF (/conf) instead:
+#   ETC_LINKS  files directly under /etc, each a symlink in the image to
+#              /conf/etc/<file> (system/build.sh stage 6). The image's own version
+#              is kept in ETC_DEFAULTS and copied to /conf when /conf lacks it
+#              (mount_etc). Writers that replace a file by rename can't work
+#              through such a link; the ones that do (timedated, localed) are
+#              pointed at /conf directly (SYSTEMD_ETC_* drop-ins).
+#              localtime's default is stored with an absolute target
+#              (/usr/share/zoneinfo/<zone>), as timedated writes it there.
+#   ETC_DIRS   directories bind-mounted from /conf/etc/<dir>, seeded with a
+#              copy of the image's on first use (later updates don't change
+#              that copy).
+# The accounts are in the LDAP directory (/conf/ldap), so passwd, group and
+# shadow are the image's system accounts only.
+ETC_LINKS="hostname hosts machine-id subuid subgid localtime adjtime locale.conf vconsole.conf printcap .pwd.lock"
+ETC_DIRS="cups bluetooth X11/xorg.conf.d"
+ETC_DEFAULTS=usr/lib/larch/etc
+
+# mount_etc <root> <conf-mount>: complete /conf with the image's defaults of
+# ETC_LINKS and ETC_DIRS it lacks, then bind ETC_DIRS on <root>/etc/<dir>.
+mount_etc() {
+    mkdir -p "$2/etc" || return 1
+    for _f in $ETC_LINKS; do
+        [ -e "$2/etc/$_f" ] || [ -L "$2/etc/$_f" ] && continue
+        [ -e "$1/$ETC_DEFAULTS/$_f" ] || [ -L "$1/$ETC_DEFAULTS/$_f" ] || continue
+        cp -Pp "$1/$ETC_DEFAULTS/$_f" "$2/etc/$_f" || return 1
+    done
+    for _d in $ETC_DIRS; do
+        [ -d "$1/etc/$_d" ] || continue
+        if [ ! -d "$2/etc/$_d" ]; then
+            mkdir -p "$(dirname "$2/etc/$_d")" || return 1
+            cp -a "$1/etc/$_d" "$2/etc/$_d" || return 1
+        fi
+        mount --bind "$2/etc/$_d" "$1/etc/$_d" || return 1
+    done
+    unset _f _d
+}
+
+# umount_etc <root>: undo mount_etc.
+umount_etc() {
+    for _d in $ETC_DIRS; do
+        umount "$1/etc/$_d" 2>/dev/null || umount -l "$1/etc/$_d" 2>/dev/null || true
+    done
+    unset _d
+}
 
 # /var's writable directories, each LARCHCONF:/var/<dir> bind-mounted on
 # /var/<dir>. Everything else in /var is the image's: symlinks into /run
@@ -70,13 +108,12 @@ umount_var() {
     unset _d
 }
 
-# Write this machine's identity files into <out-dir> (an /etc upper layer):
-# hostname, hosts, machine-id, and the account databases with the user in place
-# of the image's UID-1000 placeholder "larch". Each starts as a cp -p of the
-# image's file and is rewritten with `cat >`, so it keeps the image's owner and
-# mode (e.g. shadow: root:shadow 0640) — the same result as an overlay copy-up.
-# <config-dir> holds hostname, hosts, machine-id, and passwd/shadow with the
-# user's single line each.
+# Write this machine's identity files into <out-dir> (LARCHCONF's etc/, where
+# the image's /etc links point): hostname, hosts, machine-id from
+# <config-dir>, and the user's subordinate ID range (rootless containers)
+# appended to the image's subuid/subgid. Each starts as a cp -p of the image's
+# default (ETC_DEFAULTS), so it keeps its owner and mode.
+# The accounts themselves are in the LDAP directory (ldap_create).
 # Usage: apply_machine_config <image-root> <config-dir> <username> <out-dir>
 apply_machine_config() {
     _root="$1"; _cfg="$2"; _user="$3"; _out="$4"
@@ -84,54 +121,46 @@ apply_machine_config() {
     mkdir -p "$_out"
     chown 0:0 "$_out"
     chmod 0755 "$_out"
-    for _f in hostname hosts machine-id passwd shadow group gshadow subuid subgid; do
-        cp -p "$_root/etc/$_f" "$_out/$_f"
+    for _f in hostname hosts machine-id; do
+        cp -p "$_root/$ETC_DEFAULTS/$_f" "$_out/$_f"
+        cat "$_cfg/$_f" > "$_out/$_f"
     done
-
-    cat "$_cfg/hostname"   > "$_out/hostname"
-    cat "$_cfg/hosts"      > "$_out/hosts"
-    cat "$_cfg/machine-id" > "$_out/machine-id"
-
-    # passwd: drop any UID-1000 line, append the user.
-    grep -v '^[^:]*:[^:]*:1000:' "$_root/etc/passwd" > "$_cfg/passwd.new" || true
-    cat "$_cfg/passwd" >> "$_cfg/passwd.new"
-    cat "$_cfg/passwd.new" > "$_out/passwd"
-    # shadow: drop the placeholder's entry, append the user's.
-    grep -v "^larch:\|^${_user}:" "$_root/etc/shadow" > "$_cfg/shadow.new" || true
-    cat "$_cfg/shadow" >> "$_cfg/shadow.new"
-    cat "$_cfg/shadow.new" > "$_out/shadow"
-    rm -f "$_cfg/passwd.new" "$_cfg/shadow.new"
-
-    if [ "$_user" != "larch" ]; then
-        # Group memberships (word-boundary-safe) and the subordinate ID range
-        # for rootless containers move to the username.
-        for _f in group gshadow; do
-            sed "s/\blarch\b/$_user/g" "$_root/etc/$_f" > "$_cfg/$_f.new"
-            cat "$_cfg/$_f.new" > "$_out/$_f"
-            rm -f "$_cfg/$_f.new"
-        done
-        for _f in subuid subgid; do
-            sed "s/^larch:/$_user:/" "$_root/etc/$_f" > "$_cfg/$_f.new"
-            cat "$_cfg/$_f.new" > "$_out/$_f"
-            rm -f "$_cfg/$_f.new"
-        done
-    fi
+    for _f in subuid subgid; do
+        cp -p "$_root/$ETC_DEFAULTS/$_f" "$_out/$_f"
+        printf '%s:524288:65536\n' "$_user" >> "$_out/$_f"
+    done
     unset _root _cfg _user _out _f
 }
 
+# ldap_create <image-root> <conf-mount> <ldif>: the account directory's
+# database, /conf/ldap on LARCHCONF, created from <ldif> with the image's own
+# slapadd and slapd.conf (chrooted into <image-root>, LARCHCONF bound on its
+# /conf), owned by the image's ldap user.
+ldap_create() {
+    rm -rf "${2:?}/ldap"
+    mkdir -m 0700 "$2/ldap" || return 1
+    cp "$3" "$2/.seed.ldif" || return 1
+    mount --bind "$2" "$1/conf" || return 1
+    mount --bind /dev "$1/dev" || { umount "$1/conf"; return 1; }
+    chroot "$1" /usr/sbin/slapadd -q -f /etc/openldap/slapd.conf -l /conf/.seed.ldif \
+        && chroot "$1" chown -R ldap:ldap /conf/ldap
+    _rc=$?
+    umount "$1/dev" 2>/dev/null || true
+    umount "$1/conf" 2>/dev/null || true
+    rm -f "$2/.seed.ldif"
+    [ -f "$2/ldap/data.mdb" ] && return $_rc
+    return 1
+}
+
 # seed_layers <image-root> <config-dir> <username> <etc-out> <var-out>
-# Fresh layers for <image-root>: the identity files in <etc-out>, an empty
-# <var-out> (mount_var fills in the directory skeleton at boot), and the
-# image's /etc "up to date" stamp, so ConditionNeedsUpdate= services
-# (systemd-sysusers, ldconfig, …) don't run on the first boot but do run once
-# after each update — whose image has a newer /usr — and bring the layer up to
-# date. /var/.updated is the image's own, on the read-only /var.
+# A fresh LARCHCONF for <image-root>: the identity files in <etc-out> and an
+# empty <var-out> (mount_etc and mount_var add the image's defaults and
+# directory skeleton at boot).
 seed_layers() {
     apply_machine_config "$1" "$2" "$3" "$4"
     mkdir -p "$5"
     chown 0:0 "$5"
     chmod 0755 "$5"
-    cp -p "$1/etc/.updated" "$4/.updated" 2>/dev/null || true
 }
 
 # The files that make up the machine's identity and accounts, relative to /etc.

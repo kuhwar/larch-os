@@ -19,9 +19,11 @@
 #                               larch-os/sys.initramfs, larch-os/updater.initramfs
 #        2. LARCHSYS  (ext4)  — sys.squashfs (the chosen desktop's OS root,
 #                               loop-mounted by sys.initramfs), version, desktop
-#        3. LARCHCONF (ext4)  — /conf: etc/ + etc-work/, the upper layer of the
-#                               /etc overlay, starting with this machine's
-#                               hostname, hosts, machine-id and account files;
+#        3. LARCHCONF (ext4)  — /conf: etc/, the files the read-only /etc links
+#                               to (starting with this machine's hostname,
+#                               hosts, machine-id, subuid/subgid) and the
+#                               /etc directories bound from it; ldap/, the
+#                               account directory;
 #                               var/, /var's writable lib, log, cache and
 #                               spool (bind-mounted by sys.initramfs)
 #        4. LARCHHOME (ext4)  — /home/<username>, seeded from the image's /etc/skel
@@ -189,10 +191,6 @@ printf '%s\n' "$LARCH_HOSTNAME" > "$CONFIG_TMP/hostname"
 printf '127.0.0.1\tlocalhost\n127.0.1.1\t%s\n::1\tlocalhost ip6-localhost ip6-loopback\n' \
     "$LARCH_HOSTNAME" > "$CONFIG_TMP/hosts"
 
-# GECOS = the full name as typed (GNOME shows it as the display name).
-printf '%s:x:1000:1000:%s:/home/%s:/bin/bash\n' \
-    "$LARCH_USERNAME" "$LARCH_FULLNAME" "$LARCH_USERNAME" > "$CONFIG_TMP/passwd"
-
 # busybox mkpasswd is statically linked and always available in the initramfs.
 # openssl passwd -6 is a fallback (dynamically linked; requires libraries).
 pw_hash=$(busybox mkpasswd -m sha512 "$LARCH_PASSWORD" 2>/dev/null) || true
@@ -200,26 +198,76 @@ pw_hash=$(busybox mkpasswd -m sha512 "$LARCH_PASSWORD" 2>/dev/null) || true
     pw_hash=$(printf '%s' "$LARCH_PASSWORD" | openssl passwd -6 -stdin 2>/dev/null) || true
 [ -n "$pw_hash" ] || die "Password hashing failed (tried busybox mkpasswd and openssl passwd -6)"
 today_days=$(( $(date +%s) / 86400 ))
-printf '%s:%s:%d:0:99999:7:::\n' "$LARCH_USERNAME" "$pw_hash" "$today_days" \
-    > "$CONFIG_TMP/shadow"
-chmod 600 "$CONFIG_TMP/shadow"
+
+# The account directory (LDAP, see conf.sh ldap_create): the base, the user
+# (UID/GID 1000, cn = the full name as typed — GNOME's display name, base64
+# since it may be UTF-8), their private group, and the image's audio, video
+# and input groups (same GIDs) listing them.
+_ldif="$CONFIG_TMP/accounts.ldif"
+_b64() { printf '%s' "$1" | base64 | tr -d '\n'; }
+cat > "$_ldif" <<LDIF
+dn: dc=larch
+objectClass: dcObject
+objectClass: organization
+dc: larch
+o: larch
+
+dn: ou=people,dc=larch
+objectClass: organizationalUnit
+ou: people
+
+dn: ou=groups,dc=larch
+objectClass: organizationalUnit
+ou: groups
+
+dn: uid=$LARCH_USERNAME,ou=people,dc=larch
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+uid: $LARCH_USERNAME
+cn:: $(_b64 "$LARCH_FULLNAME")
+sn: $LARCH_USERNAME
+uidNumber: 1000
+gidNumber: 1000
+homeDirectory: /home/$LARCH_USERNAME
+loginShell: /bin/bash
+userPassword: {CRYPT}$pw_hash
+shadowLastChange: $today_days
+
+dn: cn=$LARCH_USERNAME,ou=groups,dc=larch
+objectClass: posixGroup
+cn: $LARCH_USERNAME
+gidNumber: 1000
+LDIF
+for _g in audio video input; do
+    _gid=$(awk -F: -v g="$_g" '$1 == g { print $3 }' "$MOUNT_IMG/etc/group")
+    [ -n "$_gid" ] || continue
+    printf '\ndn: cn=%s,ou=groups,dc=larch\nobjectClass: posixGroup\ncn: %s\ngidNumber: %s\nmemberUid: %s\n' \
+        "$_g" "$_g" "$_gid" "$LARCH_USERNAME" >> "$_ldif"
+done
 
 # machine-id — generated once at install so the machine keeps a stable identity
-# (DHCP lease/IP, DHCPv6 DUID, systemd journal). sys.initramfs mounts the /etc
-# overlay before systemd starts, so PID 1 reads it from the upper layer.
+# (DHCP lease/IP, DHCPv6 DUID, systemd journal). The image's /etc/machine-id
+# links to LARCHCONF:/etc/machine-id, mounted before systemd starts.
 # Format: 32 lowercase hex digits (sourced from the kernel UUID pool).
 tr -d '-' < /proc/sys/kernel/random/uuid > "$CONFIG_TMP/machine-id"
 
-# ── LARCHCONF: /etc's and /var's upper layers ────────────────────────────────
+# ── LARCHCONF: /etc's files and /var's directories ─────────────────────────────
 
 mount_or_die ext4 "$PART3" "$MOUNT_CONF"
 
 show_step "Writing machine config into the config partition"
-# /etc's upper layer (this machine's identity) and /var's directories (empty;
+# The files /etc links to (this machine's identity) and /var's directories (empty;
 # sys.initramfs creates the image's directory skeleton in them at boot).
 seed_layers "$MOUNT_IMG" "$CONFIG_TMP" "$LARCH_USERNAME" "$MOUNT_CONF/etc" "$MOUNT_CONF/var"
-# overlayfs's workdir: empty, on the same filesystem as the upper layer.
-mkdir -m 0700 "$MOUNT_CONF/etc-work"
+show_step "Creating the account directory for $LARCH_USERNAME"
+ldap_create "$MOUNT_IMG" "$MOUNT_CONF" "$CONFIG_TMP/accounts.ldif" \
+    || die "Could not create the account directory on the config partition."
+# accounts-daemon (GDM's user list) only lists directory users it has an
+# entry for: the image's /var/lib skeleton, then the user's entry.
+var_skeleton "$MOUNT_IMG/var/lib" "$MOUNT_CONF/var/lib"
+printf '[User]\nSystemAccount=false\n' \
+    > "$MOUNT_CONF/var/lib/AccountsService/users/$LARCH_USERNAME"
 rm -rf "$CONFIG_TMP"
 
 sync

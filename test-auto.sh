@@ -169,7 +169,8 @@ jdir=$(dirname "$(find "$V/journal" -name system.journal | head -1)")
 
 # Errors of the last boot, up to the shutdown this script requested.
 jc() { journalctl --directory="$jdir" -b 0 --no-pager "$@"; }
-until_shutdown=$(jc -o short-monotonic | awk -F'[][]' '/Power key pressed|System is powering down|Powering off/ { print $2; exit }')
+# (awk reads to the end: exiting early would SIGPIPE journalctl, fatal under pipefail)
+until_shutdown=$(jc -o short-monotonic | awk -F'[][]' '!t && /Power key pressed|System is powering down|Powering off/ { t = $2 } END { print t }')
 errors=$(jc -p err -o short-monotonic | awk -F'[][]' -v t="${until_shutdown:-1e9}" '$2 + 0 < t + 0' \
          | grep -vE "$KNOWN_ERRORS" || true)
 echo "  journal: $jdir"

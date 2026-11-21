@@ -8,15 +8,16 @@
 #   2. Find LARCHSYS by GPT name; LARCHCONF is the one on the same disk.
 #   3. Mount LARCHSYS (ext4) read-only and loop-mount its sys.squashfs as the
 #      root, read-only — identical on every install.
-#   4. fsck and mount LARCHCONF at /conf, then overlay /etc with its upper
-#      layer on it (conf/etc), so PID 1 starts with this machine's /etc:
-#      hostname, machine-id, accounts, units enabled at runtime; and
+#   4. fsck and mount LARCHCONF at /conf, whose files the read-only image's
+#      /etc links to (hostname, machine-id, …), completed with the image's
+#      defaults, and bind its etc/ directories on /etc's (shared/lib/conf.sh
+#      mount_etc), so PID 1 starts with this machine's /etc; and
 #      bind-mount conf/var/{lib,log,cache,spool} on /var's (shared/lib/conf.sh
 #      mount_var) — the rest of /var stays the read-only image.
 #   5. Move /dev, /proc, /sys and /run (with LARCHSYS mounted below it, at
 #      /run/larch/sys) into the new root and switch_root to systemd.
 #
-# /etc/fstab lists /conf, /etc and the /var binds too (already mounted here), so systemd
+# /etc/fstab lists /conf and the /etc and /var binds too (already mounted here), so systemd
 # orders their unmounting at shutdown; /home and the tmpfs mounts are its own.
 set -e
 
@@ -82,10 +83,7 @@ if [ ! -d "$_c/etc.new" ] && [ -d "$_c/var.new" ]; then
     mv "$_c/var.new" "$_c/var"
 fi
 rm -rf "$_c/etc.old" "$_c/var.old"
-mkdir -p "$_c/etc" "$_c/etc-work"
-mount -t overlay overlay \
-    -o "lowerdir=$NEWROOT/etc,upperdir=$_c/etc,workdir=$_c/etc-work,$OVL_OPTS" \
-    "$NEWROOT/etc" || die "Could not mount the /etc overlay."
+mount_etc "$NEWROOT" "$_c" || die "Could not set up /etc's files from /dev/$CONF_PART."
 mount_var "$NEWROOT" "$_c" || die "Could not mount /var's directories from /dev/$CONF_PART."
 
 # ── Hand over to systemd ─────────────────────────────────────────────────────

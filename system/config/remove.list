@@ -33,3 +33,9 @@ dracut*
 
 # No privilege escalation on the immutable OS.
 sudo
+
+# Perl, pulled in by openldap-servers: slapd only links libperl (perl-libs).
+perl
+perl-*
+!perl-libs
+groff-base

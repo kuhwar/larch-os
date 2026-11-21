@@ -40,11 +40,9 @@ img_open() {
         conf_umount; return 1
     fi
     IMG_OPEN=1
-    mkdir -p "$CONF_MNT/etc" "$CONF_MNT/etc-work"
-    mount -t overlay overlay \
-        -o "lowerdir=$IMG_MNT/etc,upperdir=$CONF_MNT/etc,workdir=$CONF_MNT/etc-work,$OVL_OPTS" \
-        "$IMG_MNT/etc" \
-        || { note "Users" "  Could not mount the /etc overlay."; img_close; return 1; }
+    mount --bind "$CONF_MNT" "$IMG_MNT/conf" \
+        && mount_etc "$IMG_MNT" "$CONF_MNT" \
+        || { note "Users" "  Could not mount /etc's files."; img_close; return 1; }
     mount_var "$IMG_MNT" "$CONF_MNT" \
         || { note "Users" "  Could not mount /var's directories."; img_close; return 1; }
     mount -o bind /dev "$IMG_MNT/dev" \
@@ -65,7 +63,8 @@ img_close() {
         umount "$IMG_MNT/$_m" 2>/dev/null || umount -l "$IMG_MNT/$_m" 2>/dev/null || true
     done
     umount_var "$IMG_MNT"
-    umount "$IMG_MNT/etc" 2>/dev/null || umount -l "$IMG_MNT/etc" 2>/dev/null || true
+    umount_etc "$IMG_MNT"
+    umount "$IMG_MNT/conf" 2>/dev/null || umount -l "$IMG_MNT/conf" 2>/dev/null || true
     umount "$IMG_MNT" 2>/dev/null || umount -l "$IMG_MNT" 2>/dev/null || true
     IMG_OPEN=0
     conf_umount

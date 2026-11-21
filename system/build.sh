@@ -429,11 +429,32 @@ run_stage 6 "make-squashfs — one sys-<desktop>.squashfs per desktop" && {
     for de in $DESKTOPS; do
         root=$(desktop_root "$de")
         [ -d "$root/usr" ] || die "No rootfs for desktop $de — run stage 5 first"
+        # /etc is read-only: its per-machine files become links to
+        # LARCHCONF (/conf/etc/<file>), the image's own version kept in
+        # ETC_DEFAULTS for mount_etc (shared/lib/conf.sh). Idempotent. A
+        # relative symlink (localtime → ../usr/share/zoneinfo/UTC) is stored
+        # with its absolute target, which resolves from /conf/etc too.
+        # shellcheck source=../shared/lib/conf.sh
+        . "$ROOT_DIR/shared/lib/conf.sh"
+        mkdir -p "$root/$ETC_DEFAULTS"
+        for f in $ETC_LINKS; do
+            [ "$(readlink "$root/etc/$f" 2>/dev/null)" = "/conf/etc/$f" ] && continue
+            rm -rf "${root:?}/$ETC_DEFAULTS/$f"
+            if [ -L "$root/etc/$f" ]; then
+                t=$(readlink "$root/etc/$f")
+                [ "${t#/}" != "$t" ] || t=$(realpath -m "/etc/$t")
+                ln -s "$t" "$root/$ETC_DEFAULTS/$f"
+                rm -f "$root/etc/$f"
+            elif [ -e "$root/etc/$f" ]; then
+                mv "$root/etc/$f" "$root/$ETC_DEFAULTS/$f"
+            fi
+            ln -s "/conf/etc/$f" "$root/etc/$f"
+        done
         # The image is the root of every install as-is, so it carries no
-        # machine identity: the installer writes machine-id into /etc's upper
-        # layer, and an empty file here keeps systemd from treating a missing
-        # one as a first boot. D-Bus's copy follows it.
-        : > "$root/etc/machine-id"
+        # machine identity: the installer writes LARCHCONF:/etc/machine-id, and an
+        # empty default keeps systemd from treating a missing one as a first
+        # boot. D-Bus's copy follows it.
+        : > "$root/$ETC_DEFAULTS/machine-id"
         mkdir -p "$root/var/lib/dbus"
         ln -sfn /etc/machine-id "$root/var/lib/dbus/machine-id"
         # What the image is: shown by the updater, checked by release.sh.

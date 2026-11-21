@@ -33,28 +33,46 @@ EOF
 # write to the kernel's removed runtime-disable switch (a kernel error at boot).
 rm -f /etc/selinux/config
 
-# ── PAM ──────────────────────────────────────────────────────────────────────
-# Fedora generates /etc/pam.d/system-auth & co. with authselect; "local" is the
-# plain-files profile (no sssd).
-log "Selecting the authselect 'local' profile"
+# ── PAM and NSS ──────────────────────────────────────────────────────────────
+# Fedora generates /etc/pam.d/system-auth & co. and nsswitch.conf with
+# authselect. "local" (plain files) is the base; then authselect lets go of
+# them (opt-out) and the local LDAP directory is added by hand (ldap-poc):
+# people's accounts come from nslcd (ldap) after the image's files, their
+# passwords are checked and changed by pam_ldap. Shadow stays files-only, so
+# hashes never leave the directory through NSS.
+log "PAM/NSS: authselect 'local' + the local LDAP directory"
 authselect select local --force >/dev/null
+authselect opt-out >/dev/null
 [ -e /etc/pam.d/system-auth ] || { echo "ERROR: no /etc/pam.d/system-auth" >&2; exit 1; }
+for _f in system-auth password-auth; do
+    _p=$(readlink -f "/etc/pam.d/$_f")
+    sed -i \
+        -e '/^auth .*pam_unix\.so/a auth        sufficient                                   pam_ldap.so minimum_uid=1000 use_first_pass' \
+        -e '/^account .*pam_unix\.so/a account     [default=bad success=ok user_unknown=ignore authinfo_unavail=ignore] pam_ldap.so minimum_uid=1000' \
+        -e '/^password .*pam_unix\.so/a password    sufficient                                   pam_ldap.so minimum_uid=1000 try_first_pass use_authtok' \
+        "$_p"
+    grep -q pam_ldap "$_p" || { echo "ERROR: pam_ldap not added to $_p" >&2; exit 1; }
+done
+_n=$(readlink -f /etc/nsswitch.conf)
+sed -i -E 's/^(passwd|group):([[:space:]]+)files /\1:\2files ldap /' "$_n"
+[ "$(grep -cE '^(passwd|group):.*files ldap' "$_n")" = 2 ] \
+    || { echo "ERROR: ldap not added to $_n" >&2; exit 1; }
+# authselect-apply-changes would regenerate (and, with opt-out, fail on) the
+# files at every boot; the image's are final.
+systemctl mask authselect-apply-changes.service
 
-# ── User setup ───────────────────────────────────────────────────────────────
-log "Creating default user 'larch'"
-# The UID-1000 placeholder the installer turns into the real user.
-id larch >/dev/null 2>&1 || useradd -m -s /bin/bash -c "Larch User" larch
-echo "larch:larch" | chpasswd 2>/dev/null
-# No sudo on larch-os, and the user is deliberately NOT in `wheel`: that group
-# is polkit's admin identity on Fedora, so membership would let privileged
-# polkit actions be authorized with the user's own password.
-usermod -aG audio,video,input larch
+# ── Accounts ─────────────────────────────────────────────────────────────────
+# No people in /etc/passwd: the installer creates the first one in the LDAP
+# directory (/conf/ldap). /etc/passwd, group and shadow are the image's system
+# accounts only, so every release brings its own.
+userdel -r larch >/dev/null 2>&1 || true
 
 # ── Systemd services ─────────────────────────────────────────────────────────
 # The packages' scriptlets applied Fedora's presets; set exactly what larch runs.
 log "Enabling systemd services"
 systemctl enable NetworkManager bluetooth cups.socket avahi-daemon chronyd \
-    switcheroo-control nvidia-suspend nvidia-resume nvidia-hibernate
+    switcheroo-control nvidia-suspend nvidia-resume nvidia-hibernate \
+    larch-slapd nslcd
 systemctl set-default graphical.target
 # systemd-oomd: Fedora's userspace OOM killer — masked, the kernel's OOM
 # killer is enough (swap is only zram, rootfs-overlay/etc/systemd/zram-generator.conf).
@@ -82,6 +100,9 @@ plugins=keyfile
 dhcp=internal
 
 [keyfile]
+# /etc is read-only: saved connections (Wi-Fi passwords) persist on
+# LARCHCONF's /var/lib instead.
+path=/var/lib/NetworkManager/system-connections
 
 [device]
 wifi.scan-rand-mac-address=yes

@@ -103,6 +103,15 @@ NetworkManager-wifi
 wpa_supplicant
 iw
 
+# ── Accounts: a local LDAP directory (ldap-poc branch) ──────────────────────
+# People's accounts live in slapd's database on LARCHCONF (/conf/ldap), served
+# only on a local socket; nslcd + libnss_ldap/pam_ldap (nss-pam-ldapd) make
+# them visible to NSS and PAM. /etc/passwd holds only the image's system users.
+# slapd links libperl (its Perl backend is built in), so perl-libs stays;
+# remove.list takes the rest of Perl.
+openldap-servers
+nss-pam-ldapd
+
 # ── Git ──────────────────────────────────────────────────────────────────────
 # git-core: the git CLI without Perl/Python helpers (the `git` package pulls
 # ~70 more, Perl included). It requires openssh-clients, so ssh/scp/sftp/
